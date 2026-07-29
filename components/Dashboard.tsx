@@ -334,8 +334,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
             <colgroup>
               <col style={{ width: "56px" }} />
               <col style={{ width: "15%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "12%" }} />
+              <col style={{ width: "18%" }} />
               <col style={{ width: "68px" }} />
               <col style={{ width: "84px" }} />
               <col style={{ width: "84px" }} />
@@ -349,8 +348,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
               <tr>
                 <th>区分</th>
                 <th>品目</th>
-                <th>得意先</th>
-                <th>仕入先</th>
+                <th>得意先／仕入先</th>
                 <th>拠点</th>
                 <th className="num sortable-th" onClick={() => toggleSort("purchase_date")}>
                   仕入日 {sortArrow("purchase_date")}
@@ -378,7 +376,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
             <tbody>
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="empty-state">
+                  <td colSpan={11} className="empty-state">
                     この条件に一致する値上げ検知はありません
                   </td>
                 </tr>
@@ -399,19 +397,21 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
                       {a.item_name}
                       <div className="cell-sub">{a.item_code || "商品コード未登録（個別品）"}</div>
                     </td>
-                    <td
-                      className="clickable-cell wrap-2line-cell"
-                      title={a.customer_name ?? ""}
-                      onClick={() => setCustomer(a.customer_name ?? "")}
-                    >
-                      {a.customer_name}
-                    </td>
-                    <td
-                      className="clickable-cell wrap-2line-cell"
-                      title={a.supplier_name ?? ""}
-                      onClick={() => setSupplier(a.supplier_name ?? "")}
-                    >
-                      {a.supplier_name}
+                    <td className="truncate-cell">
+                      <span
+                        className="clickable-cell"
+                        title={a.customer_name ?? ""}
+                        onClick={() => setCustomer(a.customer_name ?? "")}
+                      >
+                        {a.customer_name}
+                      </span>
+                      <div
+                        className="cell-sub clickable-cell"
+                        title={a.supplier_name ?? ""}
+                        onClick={() => setSupplier(a.supplier_name ?? "")}
+                      >
+                        {a.supplier_name}
+                      </div>
                     </td>
                     <td className="clickable-cell" onClick={() => setBranch(a.branch_code ?? "")} title={branchLabel(a.branch_code)}>
                       {branchNameOnly(a.branch_code)}

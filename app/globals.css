@@ -50,7 +50,16 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 }
 
 table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
-th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; overflow: hidden; }
+th, td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  vertical-align: top;
+}
+th:last-child, td:last-child { border-right: none; }
 th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
 td.num, th.num { text-align: right; }
 
