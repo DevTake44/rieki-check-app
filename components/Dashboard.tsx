@@ -2,10 +2,10 @@
 
 import { useMemo, useState } from "react";
 import type { PriceIncreaseAlert } from "@/lib/types";
-import { branchLabel } from "@/lib/branch-names";
+import { branchLabel, branchNameOnly } from "@/lib/branch-names";
 
 type SortKey =
-  | "order_date"
+  | "purchase_date"
   | "assumed_cost"
   | "actual_price"
   | "gap_pct"
@@ -331,6 +331,20 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
       <div className="card">
         <div className="table-scroll">
           <table>
+            <colgroup>
+              <col style={{ width: "56px" }} />
+              <col style={{ width: "15%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "68px" }} />
+              <col style={{ width: "84px" }} />
+              <col style={{ width: "84px" }} />
+              <col style={{ width: "90px" }} />
+              <col style={{ width: "68px" }} />
+              <col style={{ width: "84px" }} />
+              <col style={{ width: "120px" }} />
+              <col style={{ width: "90px" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>区分</th>
@@ -338,8 +352,8 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
                 <th>得意先</th>
                 <th>仕入先</th>
                 <th>拠点</th>
-                <th className="num sortable-th" onClick={() => toggleSort("order_date")}>
-                  受注日 {sortArrow("order_date")}
+                <th className="num sortable-th" onClick={() => toggleSort("purchase_date")}>
+                  仕入日 {sortArrow("purchase_date")}
                 </th>
                 <th className="num sortable-th" onClick={() => toggleSort("assumed_cost")}>
                   想定原価 {sortArrow("assumed_cost")}
@@ -381,22 +395,30 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
                         {a.category}
                       </span>
                     </td>
-                    <td>
+                    <td className="truncate-cell" title={a.item_name ?? ""}>
                       {a.item_name}
                       <div className="cell-sub">{a.item_code || "商品コード未登録（個別品）"}</div>
                     </td>
-                    <td className="clickable-cell" onClick={() => setCustomer(a.customer_name ?? "")}>
+                    <td
+                      className="clickable-cell wrap-2line-cell"
+                      title={a.customer_name ?? ""}
+                      onClick={() => setCustomer(a.customer_name ?? "")}
+                    >
                       {a.customer_name}
                     </td>
-                    <td className="clickable-cell" onClick={() => setSupplier(a.supplier_name ?? "")}>
+                    <td
+                      className="clickable-cell wrap-2line-cell"
+                      title={a.supplier_name ?? ""}
+                      onClick={() => setSupplier(a.supplier_name ?? "")}
+                    >
                       {a.supplier_name}
                     </td>
-                    <td className="clickable-cell" onClick={() => setBranch(a.branch_code ?? "")}>
-                      {branchLabel(a.branch_code)}
+                    <td className="clickable-cell" onClick={() => setBranch(a.branch_code ?? "")} title={branchLabel(a.branch_code)}>
+                      {branchNameOnly(a.branch_code)}
                     </td>
-                    <td className="num">{a.order_date ?? "—"}</td>
+                    <td className="num">{a.purchase_date ?? "—"}</td>
                     <td className="num">{fmtYen(a.assumed_cost)}</td>
-                    <td className="num">{fmtYen(a.actual_price)}</td>
+                    <td className="num actual-price-cell">{fmtYen(a.actual_price)}</td>
                     <td className="num">{fmtPct(a.gap_pct)}</td>
                     <td className="num">{fmtYen(a.sell_price)}</td>
                     <td className="num">

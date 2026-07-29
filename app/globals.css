@@ -49,8 +49,8 @@ h1 { font-size: 20px; margin: 0 0 4px; }
   padding: 18px 20px;
 }
 
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; overflow: hidden; }
 th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
 td.num, th.num { text-align: right; }
 
@@ -117,3 +117,20 @@ td.clickable-cell:hover { text-decoration: underline; text-decoration-color: rgb
 th.sortable-th { cursor: pointer; user-select: none; }
 th.sortable-th:hover { color: var(--text); }
 .empty-state { text-align: center; color: var(--text-muted); padding: 24px !important; }
+
+.truncate-cell {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wrap-2line-cell {
+  max-width: 118px;
+  white-space: normal;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.actual-price-cell { font-weight: 700; }

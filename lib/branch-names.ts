@@ -39,3 +39,10 @@ export function branchLabel(code: string | null | undefined): string {
   const name = BRANCH_NAMES[code];
   return name ? `${name}(${code})` : code;
 }
+
+// 表の中など、コードを省いて名称だけ出したい場所で使う。
+// 注意: 「東京」はコード21と88の2つがあるため、名称だけだと区別が付かない場合がある。
+export function branchNameOnly(code: string | null | undefined): string {
+  if (!code) return "—";
+  return BRANCH_NAMES[code] ?? code;
+}
