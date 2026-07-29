@@ -1,0 +1,72 @@
+:root {
+  --bg: #f5f6f8;
+  --card-bg: #ffffff;
+  --border: #e3e5e9;
+  --text: #1b1f24;
+  --text-muted: #6b7280;
+  --critical: #c0392b;
+  --warning: #8a6400;
+  --good: #1e7d45;
+  --neutral: #6b7280;
+  --direct: #2a78d6;
+  --stock: #eb6834;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  font-size: 14px;
+}
+
+.page { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
+
+h1 { font-size: 20px; margin: 0 0 4px; }
+.subtitle { color: var(--text-muted); font-size: 13px; margin: 0 0 20px; }
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.kpi-tile {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.kpi-tile .label { font-size: 12px; color: var(--text-muted); }
+.kpi-tile .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.cat-direct { color: var(--direct); background: rgba(42,120,214,0.12); }
+.badge.cat-stock { color: var(--stock); background: rgba(235,104,52,0.12); }
+.badge.critical { color: var(--critical); background: rgba(192,57,43,0.12); }
+.badge.warning { color: var(--warning); background: rgba(220,180,40,0.18); }
+.badge.good { color: var(--good); background: rgba(30,125,69,0.12); }
+.badge.neutral { color: var(--neutral); background: rgba(107,114,128,0.12); }
+
+.table-scroll { overflow-x: auto; }
+.cell-sub { font-size: 11px; color: var(--text-muted); }
