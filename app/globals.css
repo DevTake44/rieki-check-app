@@ -70,3 +70,50 @@ td.num, th.num { text-align: right; }
 
 .table-scroll { overflow-x: auto; }
 .cell-sub { font-size: 11px; color: var(--text-muted); }
+
+.filter-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.filter-field { display: flex; flex-direction: column; gap: 4px; }
+.filter-field label { font-size: 11.5px; color: var(--text-muted); }
+.filter-field select, .filter-field input {
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  background: var(--card-bg); color: var(--text);
+}
+
+.segmented { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.segmented button {
+  padding: 6px 10px; border: 1px solid var(--border); background: var(--card-bg);
+  border-radius: 6px; font-size: 12.5px; cursor: pointer; color: var(--text);
+}
+.segmented button.active { background: var(--direct); color: #fff; border-color: var(--direct); }
+.segmented input[type="date"] {
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px;
+}
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  background: rgba(42,120,214,0.10); color: var(--direct);
+  border: 1px solid rgba(42,120,214,0.3); border-radius: 999px; padding: 4px 6px 4px 12px;
+}
+.chip button {
+  background: none; border: none; color: inherit; cursor: pointer; font-size: 14px;
+  line-height: 1; padding: 2px 5px; border-radius: 50%;
+}
+.chip button:hover { background: rgba(42,120,214,0.18); }
+
+.filter-actions {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.ghost-btn {
+  padding: 7px 14px; border: 1px solid var(--border); background: var(--card-bg);
+  border-radius: 6px; font-size: 13px; cursor: pointer; color: var(--text);
+}
+.ghost-btn:hover { background: var(--bg); }
+.result-count { font-size: 12.5px; color: var(--text-muted); }
+
+td.clickable-cell, span.clickable-cell { cursor: pointer; }
+td.clickable-cell:hover { text-decoration: underline; text-decoration-color: rgba(107,114,128,0.5); }
+th.sortable-th { cursor: pointer; user-select: none; }
+th.sortable-th:hover { color: var(--text); }
+.empty-state { text-align: center; color: var(--text-muted); padding: 24px !important; }
