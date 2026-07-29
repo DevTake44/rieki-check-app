@@ -195,7 +195,12 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
 
   return (
     <div className="page">
-      <h1>値上げ検知ダッシュボード</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <h1>値上げ検知ダッシュボード</h1>
+        <a href="/upload" className="ghost-btn" style={{ textDecoration: "none", marginTop: 4 }}>
+          データ更新
+        </a>
+      </div>
       <p className="subtitle">
         突合済み {rows.length.toLocaleString("ja-JP")}件 ／ うち値上げ検知 {rows.length.toLocaleString("ja-JP")}件（全体）／
         現在の表示 {sorted.length.toLocaleString("ja-JP")}件 ／ Supabase(v_price_increase_alerts)からリアルタイムに取得
