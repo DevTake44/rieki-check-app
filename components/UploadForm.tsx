@@ -16,6 +16,8 @@ type Status = {
   errors: string[];
   running: boolean;
   finished: boolean;
+  refreshing: boolean;
+  refreshed: boolean;
 };
 
 const BATCH_SIZE = 1000;
@@ -30,7 +32,22 @@ function initialStatus(): Status {
     errors: [],
     running: false,
     finished: false,
+    refreshing: false,
+    refreshed: false,
   };
+}
+
+async function callRefreshApi(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/refresh", { method: "POST" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return json.error ?? res.statusText ?? "不明なエラー";
+    }
+    return null;
+  } catch (e) {
+    return String(e);
+  }
 }
 
 async function readAsShiftJisText(file: File): Promise<string> {
@@ -113,6 +130,18 @@ export default function UploadForm() {
       setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors] }));
     }
 
+    // アップロードが1件でも成功していれば、値上げ検知の集計(マテリアライズドビュー)を更新する
+    if (sent > 0) {
+      setStatus((s) => ({ ...s, refreshing: true }));
+      const refreshError = await callRefreshApi();
+      setStatus((s) => ({
+        ...s,
+        refreshing: false,
+        refreshed: !refreshError,
+        errors: refreshError ? [...s.errors, `集計の更新に失敗しました: ${refreshError}`] : s.errors,
+      }));
+    }
+
     setStatus((s) => ({ ...s, running: false, finished: true }));
   }
 
@@ -142,9 +171,18 @@ export default function UploadForm() {
                 {status.sentRows.toLocaleString("ja-JP")}件 ／ バッチ {status.doneBatches}/{status.totalBatches}
               </div>
             )}
-            {status.running && <div style={{ color: "var(--direct)", marginTop: 4 }}>アップロード中…</div>}
+            {status.running && !status.refreshing && (
+              <div style={{ color: "var(--direct)", marginTop: 4 }}>アップロード中…</div>
+            )}
+            {status.refreshing && (
+              <div style={{ color: "var(--direct)", marginTop: 4 }}>
+                値上げ検知の集計を更新中…(数十秒かかる場合があります)
+              </div>
+            )}
             {status.finished && status.errors.length === 0 && (
-              <div style={{ color: "var(--good)", marginTop: 4 }}>完了しました。</div>
+              <div style={{ color: "var(--good)", marginTop: 4 }}>
+                完了しました。{status.refreshed && "値上げ検知の集計も更新済みです。"}
+              </div>
             )}
             {status.errors.length > 0 && (
               <div style={{ color: "var(--critical)", marginTop: 4 }}>
