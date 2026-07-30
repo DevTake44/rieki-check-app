@@ -83,9 +83,28 @@ export function isBlankRow(cols: string[]): boolean {
 export function mapSalesRow(cols: string[]): SalesRowInsert | null {
   if (isBlankRow(cols)) return null;
   if (cols.length < MIN_SALES_COLS) return null;
+
+  const order_no = textOrNull(cols, 11);
+  const order_line = textOrNull(cols, 12);
+  const item_name = textOrNull(cols, 29);
+
+  // 「{件名}一式」行(受注番号=0, 受注行番号=0)は、複数の受注番号をまとめた集計行。
+  // 実際の金額・原価は別ファイル「物件」側の明細に入っており、このファイル側の金額は
+  // 常に0円(2026-07-30時点、実データ56件で確認済み)。そのまま取り込むと、
+  // 「物件」ファイルの明細と合算する際に二重計上になるため、ここで取り込まない。
+  // (手配区分='商品外'では判定しない。運賃・値引など、正当な商品外行は
+  //  order_no が0以外の実際の受注に紐づいているため。)
+  if (order_no === "0" && order_line === "0") return null;
+
+  // 「伝票消費税」行(受注番号ごとに1行存在する消費税の内訳行)は、品名以外の列が
+  // 全てNULL(受注番号もNULL)で、値上げ検知には使えないデータ。しかも受注番号がNULLの
+  // ため一意制約で重複判定できず、同じファイルを再アップロードするたびに増殖してしまう
+  // (2026-07-30時点、実データで10,505件・全件の41%を確認)。取り込まない。
+  if (item_name === "伝票消費税") return null;
+
   return {
-    order_no: textOrNull(cols, 11),
-    order_line: textOrNull(cols, 12),
+    order_no,
+    order_line,
     order_date: dateOrNull(cols, 21),
     customer_name: textOrNull(cols, 2),
     supplier_name: textOrNull(cols, 51),
@@ -105,6 +124,15 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
 export function mapPurchaseRow(cols: string[]): PurchaseRowInsert | null {
   if (isBlankRow(cols)) return null;
   if (cols.length < MIN_PURCHASE_COLS) return null;
+
+  const item_name = textOrNull(cols, 29);
+
+  // 「伝票消費税」行は仕入側にも存在する(2026-07-30時点、実データで33,715件・
+  // purchase_lines全体の約8%を確認)。仕入番号(purchase_no)もNULLのため、一意制約で
+  // 重複判定できず、同じファイルを再アップロードするたびに増殖してしまう。
+  // 値上げ検知にも使えないデータのため取り込まない(売上側のmapSalesRowと同じ理由)。
+  if (item_name === "伝票消費税") return null;
+
   return {
     order_no: textOrNull(cols, 17),
     order_line: textOrNull(cols, 18),
