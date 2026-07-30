@@ -86,6 +86,7 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
 
   const order_no = textOrNull(cols, 11);
   const order_line = textOrNull(cols, 12);
+  const item_name = textOrNull(cols, 29);
 
   // 「{件名}一式」行(受注番号=0, 受注行番号=0)は、複数の受注番号をまとめた集計行。
   // 実際の金額・原価は別ファイル「物件」側の明細に入っており、このファイル側の金額は
@@ -94,6 +95,12 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
   // (手配区分='商品外'では判定しない。運賃・値引など、正当な商品外行は
   //  order_no が0以外の実際の受注に紐づいているため。)
   if (order_no === "0" && order_line === "0") return null;
+
+  // 「伝票消費税」行(受注番号ごとに1行存在する消費税の内訳行)は、品名以外の列が
+  // 全てNULL(受注番号もNULL)で、値上げ検知には使えないデータ。しかも受注番号がNULLの
+  // ため一意制約で重複判定できず、同じファイルを再アップロードするたびに増殖してしまう
+  // (2026-07-30時点、実データで10,505件・全件の41%を確認)。取り込まない。
+  if (item_name === "伝票消費税") return null;
 
   return {
     order_no,
