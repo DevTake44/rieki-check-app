@@ -9,6 +9,7 @@ type Kind = "sales" | "purchase";
 
 type Status = {
   fileName: string;
+  detectedEncoding: string;
   totalRows: number;
   sentRows: number;
   totalBatches: number;
@@ -25,6 +26,7 @@ const BATCH_SIZE = 1000;
 function initialStatus(): Status {
   return {
     fileName: "",
+    detectedEncoding: "",
     totalRows: 0,
     sentRows: 0,
     totalBatches: 0,
@@ -50,10 +52,38 @@ async function callRefreshApi(): Promise<string | null> {
   }
 }
 
-async function readAsShiftJisText(file: File): Promise<string> {
+/**
+ * アップロードされたファイルの文字コードを自動判定して読み込む。
+ *
+ * 基幹システムから直接落としたCSVはShift_JIS(CP932)だが、
+ * 大きいファイルを分割・再保存する過程でUTF-8に変わってしまうことがある。
+ * 「Shift_JISのはず」と決め打ちすると、UTF-8のファイルを渡された時に
+ * 文字化けする(UTF-8のバイト列をShift_JISとして誤読してしまう)ため、
+ * 実際のバイト列を見て判定する。
+ *
+ * 判定方法:
+ * 1. 先頭にUTF-8のBOM(EF BB BF)があれば、UTF-8として読む。
+ * 2. BOMが無ければ、まず厳密モード(fatal: true)でUTF-8として読んでみる。
+ *    これが成功すれば、そのファイルは有効なUTF-8バイト列だったということなので
+ *    UTF-8として扱う。実際のShift_JIS(CP932)のファイルは、日本語部分が
+ *    ほぼ確実にこの厳密なUTF-8デコードに失敗する(バイトパターンが異なるため)。
+ * 3. 厳密UTF-8デコードが失敗した場合は、Shift_JIS(CP932)として読む。
+ */
+async function readFileSmart(file: File): Promise<{ text: string; encoding: string }> {
   const buf = await file.arrayBuffer();
-  const decoder = new TextDecoder("shift_jis");
-  return decoder.decode(buf);
+  const bytes = new Uint8Array(buf);
+
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return { text: new TextDecoder("utf-8").decode(buf), encoding: "UTF-8 (BOM付き)" };
+  }
+
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(buf);
+    return { text, encoding: "UTF-8" };
+  } catch {
+    const text = new TextDecoder("shift_jis").decode(buf);
+    return { text, encoding: "Shift_JIS (CP932)" };
+  }
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -71,8 +101,11 @@ export default function UploadForm() {
     setStatus({ ...initialStatus(), fileName: file.name, running: true });
 
     let text: string;
+    let encoding: string;
     try {
-      text = await readAsShiftJisText(file);
+      const result = await readFileSmart(file);
+      text = result.text;
+      encoding = result.encoding;
     } catch (e) {
       setStatus((s) => ({
         ...s,
@@ -82,6 +115,7 @@ export default function UploadForm() {
       }));
       return;
     }
+    setStatus((s) => ({ ...s, detectedEncoding: encoding }));
 
     const parsed = Papa.parse<string[]>(text, { skipEmptyLines: true });
     const dataRows = parsed.data.slice(1); // 1行目はヘッダー行なので除外
@@ -165,6 +199,7 @@ export default function UploadForm() {
         {status.fileName && (
           <div style={{ marginTop: 12, fontSize: 13 }}>
             <div>ファイル: {status.fileName}</div>
+            {status.detectedEncoding && <div>判定した文字コード: {status.detectedEncoding}</div>}
             {status.totalRows > 0 && (
               <div>
                 読み込んだ行数: {status.totalRows.toLocaleString("ja-JP")}件 ／ 送信済み:{" "}
