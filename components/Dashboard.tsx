@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PriceIncreaseAlert } from "@/lib/types";
 import { branchLabel, branchNameOnly } from "@/lib/branch-names";
-import { repLabel } from "@/lib/rep-names";
+import { repLabel, repNameOnly } from "@/lib/rep-names";
 
 type SortKey =
   | "purchase_date"
@@ -187,7 +187,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
     const headers = [
       "区分", "品番", "品目", "得意先", "仕入先", "拠点", "営業担当",
       "受注日", "仕入日", "想定原価", "実際仕入単価", "差額率(%)",
-      "販売単価", "実際粗利率(%)", "数量", "影響額",
+      "販売単価", "実際粗利率(%)", "数量", "影響額", "受注番号",
     ];
     const lines = [headers.map(csvEscape).join(",")];
     sorted.forEach((a) => {
@@ -196,7 +196,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
           a.category, a.item_code || "(コード未登録)", a.item_name, a.customer_name, a.supplier_name,
           branchLabel(a.branch_code), repLabel(a.rep_code), a.order_date, a.purchase_date,
           a.assumed_cost, a.actual_price, a.gap_pct, a.sell_price,
-          a.actual_margin_pct === null ? "" : a.actual_margin_pct, a.qty, a.impact,
+          a.actual_margin_pct === null ? "" : a.actual_margin_pct, a.qty, a.impact, a.order_no,
         ]
           .map(csvEscape)
           .join(",")
@@ -380,7 +380,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
               <col style={{ width: "56px" }} />
               <col style={{ width: "15%" }} />
               <col style={{ width: "18%" }} />
-              <col style={{ width: "68px" }} />
+              <col style={{ width: "100px" }} />
               <col style={{ width: "84px" }} />
               <col style={{ width: "84px" }} />
               <col style={{ width: "90px" }} />
@@ -388,13 +388,14 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
               <col style={{ width: "84px" }} />
               <col style={{ width: "120px" }} />
               <col style={{ width: "90px" }} />
+              <col style={{ width: "110px" }} />
             </colgroup>
             <thead>
               <tr>
                 <th>区分</th>
                 <th>品目</th>
                 <th>得意先／仕入先</th>
-                <th>拠点</th>
+                <th>拠点／担当者</th>
                 <th className="num sortable-th" onClick={() => toggleSort("purchase_date")}>
                   仕入日 {sortArrow("purchase_date")}
                 </th>
@@ -416,12 +417,13 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
                 <th className="num sortable-th" onClick={() => toggleSort("impact")}>
                   影響額 {sortArrow("impact")}
                 </th>
+                <th>受注番号</th>
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="empty-state">
+                  <td colSpan={12} className="empty-state">
                     この条件に一致する値上げ検知はありません
                   </td>
                 </tr>
@@ -458,8 +460,21 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
                         {a.supplier_name}
                       </div>
                     </td>
-                    <td className="clickable-cell" onClick={() => setBranch(a.branch_code ?? "")} title={branchLabel(a.branch_code)}>
-                      {branchNameOnly(a.branch_code)}
+                    <td className="truncate-cell">
+                      <span
+                        className="clickable-cell"
+                        title={branchLabel(a.branch_code)}
+                        onClick={() => setBranch(a.branch_code ?? "")}
+                      >
+                        {branchNameOnly(a.branch_code)}
+                      </span>
+                      <div
+                        className="cell-sub clickable-cell"
+                        title={repLabel(a.rep_code)}
+                        onClick={() => setRep(a.rep_code ?? "")}
+                      >
+                        {repNameOnly(a.rep_code)}
+                      </div>
                     </td>
                     <td className="num">{a.purchase_date ?? "—"}</td>
                     <td className="num">{fmtYen(a.assumed_cost)}</td>
@@ -472,6 +487,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
                       </span>
                     </td>
                     <td className="num">{fmtYen(a.impact)}</td>
+                    <td>{a.order_no ?? "—"}</td>
                   </tr>
                 );
               })}
