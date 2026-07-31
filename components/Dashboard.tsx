@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PriceIncreaseAlert } from "@/lib/types";
 import { branchLabel, branchNameOnly } from "@/lib/branch-names";
+import { repLabel } from "@/lib/rep-names";
 
 type SortKey =
   | "purchase_date"
@@ -34,6 +35,18 @@ function uniqueSorted(values: (string | null | undefined)[]): string[] {
   return Array.from(new Set(values.filter((v): v is string => !!v))).sort((a, b) =>
     a.localeCompare(b, "ja")
   );
+}
+
+// 拠点コード・担当者コードのような数値の文字列を、自然な数値順にソートする。
+// localeCompareの文字列ソートだと "21" が "3" より前に来てしまい、
+// 番号の大きい拠点(22以降など)が一覧の途中に紛れて「出てこない」ように見えるため。
+function uniqueSortedNumeric(values: (string | null | undefined)[]): string[] {
+  return Array.from(new Set(values.filter((v): v is string => !!v))).sort((a, b) => {
+    const na = Number(a);
+    const nb = Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return a.localeCompare(b, "ja");
+  });
 }
 
 function csvEscape(v: unknown): string {
@@ -71,10 +84,37 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
   const [sortKey, setSortKey] = useState<SortKey>("actual_margin_pct");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
 
-  const branches = useMemo(() => uniqueSorted(rows.map((r) => r.branch_code)), [rows]);
-  const reps = useMemo(() => uniqueSorted(rows.map((r) => r.rep_code)), [rows]);
-  const customers = useMemo(() => uniqueSorted(rows.map((r) => r.customer_name)), [rows]);
+  const branches = useMemo(() => uniqueSortedNumeric(rows.map((r) => r.branch_code)), [rows]);
+
+  // 営業担当は、拠点を選んでいればその拠点分だけに絞り込む。
+  const reps = useMemo(
+    () =>
+      uniqueSortedNumeric(
+        rows.filter((r) => !branch || r.branch_code === branch).map((r) => r.rep_code)
+      ),
+    [rows, branch]
+  );
+
+  // 得意先は、拠点・営業担当を選んでいればその分だけに絞り込む。
+  const customers = useMemo(
+    () =>
+      uniqueSorted(
+        rows
+          .filter((r) => (!branch || r.branch_code === branch) && (!rep || r.rep_code === rep))
+          .map((r) => r.customer_name)
+      ),
+    [rows, branch, rep]
+  );
+
   const suppliers = useMemo(() => uniqueSorted(rows.map((r) => r.supplier_name)), [rows]);
+
+  // 拠点を切り替えて、それまで選んでいた営業担当がその拠点に存在しなくなった場合はクリアする
+  // (存在しない担当のままだと0件表示になり、原因が分かりにくいため)。
+  useEffect(() => {
+    if (rep && !reps.includes(rep)) {
+      setRep("");
+    }
+  }, [reps, rep]);
 
   function applyPeriod(key: string) {
     setPeriod(key);
@@ -154,7 +194,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
       lines.push(
         [
           a.category, a.item_code || "(コード未登録)", a.item_name, a.customer_name, a.supplier_name,
-          branchLabel(a.branch_code), a.rep_code, a.order_date, a.purchase_date,
+          branchLabel(a.branch_code), repLabel(a.rep_code), a.order_date, a.purchase_date,
           a.assumed_cost, a.actual_price, a.gap_pct, a.sell_price,
           a.actual_margin_pct === null ? "" : a.actual_margin_pct, a.qty, a.impact,
         ]
@@ -175,7 +215,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
 
   const chips: { label: string; value: string; clear: () => void }[] = [];
   if (branch) chips.push({ label: "拠点", value: branchLabel(branch), clear: () => setBranch("") });
-  if (rep) chips.push({ label: "営業担当", value: rep, clear: () => setRep("") });
+  if (rep) chips.push({ label: "営業担当", value: repLabel(rep), clear: () => setRep("") });
   if (customer) chips.push({ label: "得意先", value: customer, clear: () => setCustomer("") });
   if (supplier) chips.push({ label: "仕入先", value: supplier, clear: () => setSupplier("") });
   if (item) chips.push({ label: "品名", value: item, clear: () => setItem("") });
@@ -226,7 +266,7 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
               <option value="">すべて</option>
               {reps.map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {repLabel(r)}
                 </option>
               ))}
             </select>
