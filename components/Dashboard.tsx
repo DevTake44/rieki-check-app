@@ -237,9 +237,23 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
     <div className="page">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h1>値上げ検知ダッシュボード</h1>
-        <a href="/upload" className="ghost-btn" style={{ textDecoration: "none", marginTop: 4 }}>
-          データ更新
-        </a>
+        <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+          {/* 別プロジェクト(商品単価検索)への単純リンク。合言葉ロックは先方側にかかっているため、
+              クリックした人が別途合言葉を入力する。品番などを引き継ぐ連携はあえてしていない
+              (行クリックのたびに裏で検索が走ると使う側が混乱するため、2026-07-31に見送り)。 */}
+          <a
+            href="https://sales-dashboard-mu-three.vercel.app/tools/lookup"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ghost-btn"
+            style={{ textDecoration: "none" }}
+          >
+            商品単価検索を開く
+          </a>
+          <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+            データ更新
+          </a>
+        </div>
       </div>
       <p className="subtitle">
         突合済み {rows.length.toLocaleString("ja-JP")}件 ／ うち値上げ検知 {rows.length.toLocaleString("ja-JP")}件（全体）／
