@@ -4,7 +4,8 @@
 // 列番号(0始まり)は、過去にPythonで解析した際に確定させたものと同じ。
 // 売上側: 2=得意先名1, 11=受注番号, 12=受注行番号, 15=納品書番号, 16=納品書行数,
 //         21=受注年月日, 22=納品年月日, 23=営業所コード, 24=営業担当, 27=品番, 29=品名,
-//         34=受注総数量, 37=納品総数量, 39=販売単価, 40=金額, 49=手配区分, 51=仕入先名1, 53=原価
+//         34=受注総数量, 37=納品総数量, 39=販売単価, 40=金額, 42=出荷場所コード(AQ列),
+//         43=出荷場所名(AR列), 49=手配区分, 50=仕入先コード(AY列), 51=仕入先名1, 53=原価(BB列)
 // 仕入側: 2=仕入先名1, 15=仕入番号, 16=仕入行番号, 17=受注番号, 18=受注行番号,
 //         22=仕入年月日, 27=品番, 29=品名, 36=仕入バラ数, 39=単価, 52=得意先名1(納品先名)
 //
@@ -13,6 +14,11 @@
 // 返品→再売上の訂正が入る場合、行ごとの「受注総数量」は0や実態と異なる値になり得るが、
 // 「納品総数量」はその行(その納品書番号)で実際に動いた数量を正しく表す。
 // 実データで sum(納品総数量 × 販売単価) が「金額」列(40列目)と完全一致することを確認済み。
+//
+// 追加(2026-07-31、社内間金額機能のため): 出荷場所コード・出荷場所名(AQ・AR列)、
+// 仕入先コード(AY列)を新たに取り込む。在庫区分は「原価(BB列, 既存のassumed_cost)×
+// 売上数量」を出荷場所(拠点コード)別に集計し、直送区分は仕入先コードが1〜199
+// (＝実在の外部業者ではなく社内の拠点・倉庫)の行を対象にする。仕入CSVは使わない。
 
 export type SalesRowInsert = {
   order_no: string | null;
@@ -20,6 +26,7 @@ export type SalesRowInsert = {
   order_date: string | null;
   customer_name: string | null;
   supplier_name: string | null;
+  supplier_code: string | null;
   branch_code: string | null;
   rep_code: string | null;
   arrange_type: string | null;
@@ -30,6 +37,8 @@ export type SalesRowInsert = {
   assumed_cost: number | null;
   delivery_note_no: string | null;
   delivery_note_line: string | null;
+  shipping_code: string | null;
+  shipping_name: string | null;
 };
 
 export type PurchaseRowInsert = {
@@ -135,6 +144,7 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     order_date,
     customer_name: textOrNull(cols, 2),
     supplier_name: textOrNull(cols, 51),
+    supplier_code: textOrNull(cols, 50),
     branch_code: textOrNull(cols, 23),
     rep_code: textOrNull(cols, 24),
     arrange_type: textOrNull(cols, 49),
@@ -145,6 +155,8 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     assumed_cost: numOrNull(cols, 53),
     delivery_note_no: textOrNull(cols, 15),
     delivery_note_line: textOrNull(cols, 16),
+    shipping_code: textOrNull(cols, 42),
+    shipping_name: textOrNull(cols, 43),
   };
 }
 
