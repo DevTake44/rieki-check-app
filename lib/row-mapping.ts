@@ -16,14 +16,21 @@
 // 実データで sum(納品総数量 × 販売単価) が「金額」列(40列目)と完全一致することを確認済み。
 //
 // 追加(2026-07-31、社内間金額機能のため): 出荷場所コード・出荷場所名(AQ・AR列)、
-// 仕入先コード(AY列)を新たに取り込む。在庫区分は「原価(BB列, 既存のassumed_cost)×
-// 売上数量」を出荷場所(拠点コード)別に集計し、直送区分は仕入先コードが1〜199
-// (＝実在の外部業者ではなく社内の拠点・倉庫)の行を対象にする。仕入CSVは使わない。
+// 仕入先コード(AY列)、納品年月日(22列目、delivery_date)を新たに取り込む。
+// 集計ルール(2026-07-31にユーザーと確認済み):
+//   ・在庫区分・手配区分: 出荷場所コードが1〜199(倉庫・拠点)の行を対象に、
+//     原価(BB列, 既存のassumed_cost) × 売上数量 を出荷場所別に集計。
+//     出荷場所コード200(直送)・201(入荷先変更)は対象外。
+//   ・メーカー直送区分: 仕入先コードが1〜199(＝実在の外部業者ではなく社内の
+//     拠点・倉庫)の行だけを対象に、同様に原価×売上数量を仕入先別に集計。
+//   ・期間は「受注年月日」ではなく「納品年月日」の20日締め(例: 202606 = 5/21〜6/20)。
+// 仕入CSVは使わない。
 
 export type SalesRowInsert = {
   order_no: string | null;
   order_line: string | null;
   order_date: string | null;
+  delivery_date: string | null;
   customer_name: string | null;
   supplier_name: string | null;
   supplier_code: string | null;
@@ -142,6 +149,7 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     order_no,
     order_line,
     order_date,
+    delivery_date: dateOrNull(cols, 22),
     customer_name: textOrNull(cols, 2),
     supplier_name: textOrNull(cols, 51),
     supplier_code: textOrNull(cols, 50),
