@@ -88,13 +88,26 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
     return dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null;
   }, [orders]);
 
-  // 期間(月度)キー("202606"のような形式)は、20日締めの受注日から機械的に作る。
+  const maxDeliveryDate = useMemo(() => {
+    const dates = orders.map((o) => o.delivery_date).filter((d): d is string => !!d);
+    return dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null;
+  }, [orders]);
+
+  // 期間(月度)キー("202606"のような形式)は、20日締めの納品日から機械的に作る。
   // 表示上は年・月のプルダウン2つだけにして、締め日の内訳(5/21〜6/20など)は
   // 裏側の絞り込み計算にのみ使う(見た目には出さない)。
+  //
+  // 2026-08-03追記: 当初は受注日(order_date)基準で期間を作っていたが、姉妹アプリ
+  // sales-dashboard(月次売上集計)の数値と突き合わせたところ、受注日基準だと月によって
+  // 数%〜50%以上の差が出ていた。原因を調査した結果、sales-dashboard側は納品日
+  // (delivery_date)基準で月度を集計していることが判明。受注してから納品までにタイム
+  // ラグがあるため、特に月末・月初にまたがる受注は「受注日基準の月度」と「納品日基準の
+  // 月度」がずれる。納品日基準に揃えたところ、ほぼ全ての月で差が1〜1.5%以内に収まる
+  // ことを確認できたため、期間の絞り込みは納品日基準に変更した。
   const availablePeriods = useMemo(() => {
     const keys = new Set<string>();
     orders.forEach((o) => {
-      if (o.order_date) keys.add(periodKeyFor(o.order_date));
+      if (o.delivery_date) keys.add(periodKeyFor(o.delivery_date));
     });
     return Array.from(keys).sort((a, b) => b.localeCompare(a));
   }, [orders]);
@@ -151,8 +164,8 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
     const q = search.trim().toLowerCase();
     return orders.filter((o) => {
       if (branch && o.branch_code !== branch) return false;
-      if (dateFrom && (!o.order_date || o.order_date < dateFrom)) return false;
-      if (dateTo && (!o.order_date || o.order_date > dateTo)) return false;
+      if (dateFrom && (!o.delivery_date || o.delivery_date < dateFrom)) return false;
+      if (dateTo && (!o.delivery_date || o.delivery_date > dateTo)) return false;
       if (q) {
         const hay = `${o.order_no} ${o.customer_name ?? ""} ${o.customer_code ?? ""} ${o.project_name ?? ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -308,7 +321,9 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
         受注番号単位で集計した売上・原価・利益を、受注番号・得意先・物件・担当のいずれかの単位で切り替えて見られます。
         原価は、在庫区分は売上データの原価、メーカー直送・手配区分は仕入データとの受注番号・行番号一致による実績原価(見つからない場合は売上データの原価で代用)を使っています。
         運賃・値引き等の商品外行も、実際の売上への影響としてそのまま含めています。
+        年・月の絞り込みは納品日(20日締め)基準です(sales-dashboardの月次売上集計と基準を揃えています)。
         {maxOrderDate && <> データの最新受注日: {maxOrderDate}</>}
+        {maxDeliveryDate && <> / 最新納品日: {maxDeliveryDate}</>}
       </p>
 
       <div className="card" style={{ marginBottom: 20 }}>
