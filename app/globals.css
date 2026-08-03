@@ -143,3 +143,25 @@ th.sortable-th:hover { color: var(--text); }
   overflow: hidden;
 }
 .actual-price-cell { font-weight: 700; }
+
+/* 売上利益ダッシュボード: 受注番号単位の明細を「1件=2段」で横スクロールなしに表示するための
+   グリッドレイアウト(得意先コード・得意先・拠点・担当・受注番号 / 物件名・売上計・原価計・利益・利益率)。 */
+.record-panel { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.record-head { background: var(--bg); border-bottom: 1px solid var(--border); padding: 6px 10px; }
+.record-head-line {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  font-size: 11px; color: var(--text-muted); font-weight: 600;
+}
+.record-head-line + .record-head-line { margin-top: 4px; }
+.sortable-field { cursor: pointer; user-select: none; }
+.sortable-field:hover { color: var(--text); }
+.record-body { max-height: 640px; overflow-y: auto; }
+.record-item { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.record-item:last-child { border-bottom: none; }
+.record-item:hover { background: var(--bg); }
+.record-line {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  font-size: 12.5px; padding: 2px 0;
+}
+.record-line .rf-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.record-line .rf-value.num { text-align: right; }
