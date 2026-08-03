@@ -4,7 +4,14 @@ import { useMemo, useState } from "react";
 import type { ProfitOrder } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
-import { periodKeyFor, periodRangeFor } from "@/lib/period";
+import {
+  periodKeyFor,
+  periodRangeFor,
+  fiscalYearStartOf,
+  fiscalYearPeriods,
+  fiscalYearRangeFor,
+  fiscalYearLabel,
+} from "@/lib/period";
 
 function fmtYen(v: number | null | undefined) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -117,15 +124,30 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
     return Array.from(ys).sort((a, b) => b.localeCompare(a));
   }, [availablePeriods]);
 
+  // 決算期(10月始まり、9/21〜翌9/20が1期)単位での「今期」「前期」切り替え用。
+  // データに含まれる決算期の期首年(10月度の年)を新しい順に並べ、先頭を今期・
+  // 2番目を前期として扱う。前期分のデータがまだ無ければ前期ボタンは出さない。
+  const availableFiscalYears = useMemo(() => {
+    const ys = new Set(availablePeriods.map((k) => fiscalYearStartOf(k)));
+    return Array.from(ys).sort((a, b) => b - a);
+  }, [availablePeriods]);
+  const currentFYStart = availableFiscalYears[0];
+  const previousFYStart = availableFiscalYears[1];
+
+  type PeriodMode = "all" | "fy-current" | "fy-previous" | "month";
+
   const [branch, setBranch] = useState("");
-  const [periodKey, setPeriodKey] = useState(() => availablePeriods[0] ?? "");
+  const [periodMode, setPeriodMode] = useState<PeriodMode>(() =>
+    availableFiscalYears.length ? "fy-current" : "all"
+  );
+  const [periodKey, setPeriodKey] = useState(""); // periodMode === "month" のときだけ使う
   const [dimension, setDimension] = useState<Dimension>("order");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("profit");
   const [sortDir, setSortDir] = useState<1 | -1>(1); // 1=小さい順(赤字が上), -1=大きい順
 
-  const selectedYear = periodKey.slice(0, 4);
-  const selectedMonth = periodKey.slice(4, 6);
+  const selectedYear = periodMode === "month" ? periodKey.slice(0, 4) : "";
+  const selectedMonth = periodMode === "month" ? periodKey.slice(4, 6) : "";
 
   const monthsForSelectedYear = useMemo(() => {
     if (!selectedYear) return [];
@@ -137,6 +159,7 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
 
   function handleYearChange(y: string) {
     if (!y) {
+      setPeriodMode("all");
       setPeriodKey("");
       return;
     }
@@ -145,18 +168,39 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       .map((k) => k.slice(4, 6))
       .sort();
     const month = months.includes(selectedMonth) ? selectedMonth : months[months.length - 1] ?? "";
+    setPeriodMode("month");
     setPeriodKey(month ? `${y}${month}` : "");
   }
 
   function handleMonthChange(m: string) {
     if (!selectedYear || !m) return;
+    setPeriodMode("month");
     setPeriodKey(`${selectedYear}${m}`);
   }
 
+  function resetFilters() {
+    setBranch("");
+    setSearch("");
+    setDimension("order");
+    setPeriodMode(availableFiscalYears.length ? "fy-current" : "all");
+    setPeriodKey("");
+    setSortKey("profit");
+    setSortDir(1);
+  }
+
   const { from: dateFrom, to: dateTo } = useMemo(() => {
-    if (!periodKey) return { from: "", to: "" };
-    return periodRangeFor(periodKey);
-  }, [periodKey]);
+    if (periodMode === "month") {
+      if (!periodKey) return { from: "", to: "" };
+      return periodRangeFor(periodKey);
+    }
+    if (periodMode === "fy-current" && currentFYStart !== undefined) {
+      return fiscalYearRangeFor(currentFYStart);
+    }
+    if (periodMode === "fy-previous" && previousFYStart !== undefined) {
+      return fiscalYearRangeFor(previousFYStart);
+    }
+    return { from: "", to: "" };
+  }, [periodMode, periodKey, currentFYStart, previousFYStart]);
 
   const branches = useMemo(() => uniqueSortedNumeric(orders.map((o) => o.branch_code)), [orders]);
 
@@ -173,6 +217,48 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       return true;
     });
   }, [orders, branch, dateFrom, dateTo, search]);
+
+  // ---- 期ごとの売上一覧(得意先別・担当別、決算期1年分) ----
+  const [yearlyDimension, setYearlyDimension] = useState<"customer" | "rep">("customer");
+  const [yearlyFY, setYearlyFY] = useState<"current" | "previous">("current");
+  const yearlyFYStart = yearlyFY === "current" ? currentFYStart : previousFYStart;
+  const yearlyPeriods = useMemo(
+    () => (yearlyFYStart !== undefined ? fiscalYearPeriods(yearlyFYStart) : []),
+    [yearlyFYStart]
+  );
+
+  type YearlyRow = { key: string; label: string; byPeriod: Record<string, number>; total: number };
+
+  const yearlyRows: YearlyRow[] = useMemo(() => {
+    if (yearlyFYStart === undefined) return [];
+    const { from, to } = fiscalYearRangeFor(yearlyFYStart);
+    const map = new Map<string, YearlyRow>();
+    for (const o of orders) {
+      if (branch && o.branch_code !== branch) continue;
+      if (!o.delivery_date || o.delivery_date < from || o.delivery_date > to) continue;
+      const pKey = periodKeyFor(o.delivery_date);
+      let key: string;
+      let label: string;
+      if (yearlyDimension === "customer") {
+        key = o.customer_code || o.customer_name || "(得意先不明)";
+        label =
+          o.customer_name && o.customer_code
+            ? `${o.customer_name}(${o.customer_code})`
+            : o.customer_name || o.customer_code || "(得意先不明)";
+      } else {
+        key = o.rep_code || "__NONE__";
+        label = repLabel(o.rep_code);
+      }
+      let row = map.get(key);
+      if (!row) {
+        row = { key, label, byPeriod: {}, total: 0 };
+        map.set(key, row);
+      }
+      row.byPeriod[pKey] = (row.byPeriod[pKey] ?? 0) + o.revenue;
+      row.total += o.revenue;
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [orders, branch, yearlyDimension, yearlyFYStart]);
 
   const totals = useMemo(() => {
     return filtered.reduce(
@@ -244,7 +330,14 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
   function downloadCsv() {
     if (!sortedGroups.length) return;
     const dimLabel = DIMENSIONS.find((d) => d.key === dimension)?.label ?? "";
-    const periodLabel = periodKey ? `${selectedYear}年${parseInt(selectedMonth, 10)}月` : "全期間";
+    const periodLabel =
+      periodMode === "month" && periodKey
+        ? `${selectedYear}年${parseInt(selectedMonth, 10)}月`
+        : periodMode === "fy-current" && currentFYStart !== undefined
+        ? fiscalYearLabel(currentFYStart)
+        : periodMode === "fy-previous" && previousFYStart !== undefined
+        ? fiscalYearLabel(previousFYStart)
+        : "全期間";
 
     if (dimension === "order") {
       const headers = ["得意先コード", "得意先", "拠点", "担当", "受注番号", "物件名", "売上計", "原価計", "利益", "利益率(%)"];
@@ -352,10 +445,40 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
           </div>
         </div>
         <div className="filter-row" style={{ marginTop: 10 }}>
+          <div className="filter-field" style={{ gridColumn: "span 4" }}>
+            <label>期間(決算期・10月始まり)</label>
+            <div className="segmented">
+              <button type="button" className={periodMode === "all" ? "active" : ""} onClick={() => setPeriodMode("all")}>
+                全期間
+              </button>
+              {currentFYStart !== undefined && (
+                <button
+                  type="button"
+                  className={periodMode === "fy-current" ? "active" : ""}
+                  onClick={() => setPeriodMode("fy-current")}
+                >
+                  今期({fiscalYearLabel(currentFYStart)})
+                </button>
+              )}
+              {previousFYStart !== undefined ? (
+                <button
+                  type="button"
+                  className={periodMode === "fy-previous" ? "active" : ""}
+                  onClick={() => setPeriodMode("fy-previous")}
+                >
+                  前期({fiscalYearLabel(previousFYStart)})
+                </button>
+              ) : (
+                <span className="cell-sub">前期データは未アップロードです</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="filter-row" style={{ marginTop: 10 }}>
           <div className="filter-field">
-            <label>年</label>
+            <label>年(特定の月を指定)</label>
             <select value={selectedYear} onChange={(e) => handleYearChange(e.target.value)}>
-              <option value="">全期間</option>
+              <option value="">—</option>
               {availableYears.map((y) => (
                 <option key={y} value={y}>
                   {y}年
@@ -391,9 +514,14 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
           </div>
         </div>
         <div className="filter-actions">
-          <button className="ghost-btn" onClick={downloadCsv} disabled={!sortedGroups.length}>
-            この一覧をCSVでダウンロード
-          </button>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="ghost-btn" onClick={resetFilters}>
+              絞り込みをリセット
+            </button>
+            <button className="ghost-btn" onClick={downloadCsv} disabled={!sortedGroups.length}>
+              この一覧をCSVでダウンロード
+            </button>
+          </div>
           <span className="result-count">{sortedGroups.length.toLocaleString("ja-JP")}件を表示中</span>
         </div>
       </div>
@@ -523,6 +651,100 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
             </table>
           </div>
         )}
+      </div>
+
+      <div className="card" style={{ marginTop: 20 }}>
+        <h2 style={{ marginTop: 0 }}>期ごとの売上一覧(得意先別・担当別、決算期1年分)</h2>
+        <p className="cell-sub" style={{ marginBottom: 12 }}>
+          sales-dashboardの月次売上集計と突き合わせるための一覧です。原価・利益は含まず、売上金額(納品日基準)のみを、
+          決算期の10月度〜翌9月度の12ヶ月で並べています。上の「拠点」絞り込みは反映されますが、期間・表示単位の絞り込みとは連動しません。
+        </p>
+        <div className="filter-row">
+          <div className="filter-field">
+            <label>集計単位</label>
+            <div className="segmented">
+              <button
+                type="button"
+                className={yearlyDimension === "customer" ? "active" : ""}
+                onClick={() => setYearlyDimension("customer")}
+              >
+                得意先別
+              </button>
+              <button
+                type="button"
+                className={yearlyDimension === "rep" ? "active" : ""}
+                onClick={() => setYearlyDimension("rep")}
+              >
+                担当別
+              </button>
+            </div>
+          </div>
+          <div className="filter-field" style={{ gridColumn: "span 2" }}>
+            <label>決算期</label>
+            <div className="segmented">
+              {currentFYStart !== undefined && (
+                <button
+                  type="button"
+                  className={yearlyFY === "current" ? "active" : ""}
+                  onClick={() => setYearlyFY("current")}
+                >
+                  今期({fiscalYearLabel(currentFYStart)})
+                </button>
+              )}
+              {previousFYStart !== undefined ? (
+                <button
+                  type="button"
+                  className={yearlyFY === "previous" ? "active" : ""}
+                  onClick={() => setYearlyFY("previous")}
+                >
+                  前期({fiscalYearLabel(previousFYStart)})
+                </button>
+              ) : (
+                <span className="cell-sub">前期データは未アップロードです</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="filter-actions">
+          <span className="result-count">{yearlyRows.length.toLocaleString("ja-JP")}件を表示中</span>
+        </div>
+        <div className="table-scroll table-scroll-v" style={{ marginTop: 10 }}>
+          <table style={{ minWidth: 160 + (yearlyPeriods.length + 1) * 92 }}>
+            <thead>
+              <tr>
+                <th>{yearlyDimension === "customer" ? "得意先" : "担当"}</th>
+                {yearlyPeriods.map((p) => (
+                  <th key={p} className="num">
+                    {parseInt(p.slice(4, 6), 10)}月
+                  </th>
+                ))}
+                <th className="num">合計</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yearlyRows.length === 0 && (
+                <tr>
+                  <td colSpan={yearlyPeriods.length + 2} className="empty-state">
+                    この決算期のデータはまだありません
+                  </td>
+                </tr>
+              )}
+              {yearlyRows.map((r) => (
+                <tr key={r.key}>
+                  <td>{r.label}</td>
+                  {yearlyPeriods.map((p) => (
+                    <td key={p} className="num">
+                      {fmtYen(r.byPeriod[p] ?? 0)}
+                    </td>
+                  ))}
+                  <td className="num" style={{ fontWeight: 600 }}>
+                    {fmtYen(r.total)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -78,6 +78,7 @@ td.num, th.num { text-align: right; }
 .badge.neutral { color: var(--neutral); background: rgba(107,114,128,0.12); }
 
 .table-scroll { overflow-x: auto; }
+.table-scroll-v { max-height: 640px; overflow-y: auto; }
 .cell-sub { font-size: 11px; color: var(--text-muted); }
 
 .filter-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
