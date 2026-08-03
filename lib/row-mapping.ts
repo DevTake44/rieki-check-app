@@ -25,6 +25,15 @@
 //     拠点・倉庫)の行だけを対象に、同様に原価×売上数量を仕入先別に集計。
 //   ・期間は「受注年月日」ではなく「納品年月日」の20日締め(例: 202606 = 5/21〜6/20)。
 // 仕入CSVは使わない。
+//
+// 追加(2026-07-31、拠点間の純粋な在庫移動を拾うため): 納入先名1(7列目、
+// delivery_dest_name)・受注総数量(34列目、order_qty)を新たに取り込む。
+// 拠点間の在庫移動(倉庫→拠点への振替)は売上を伴わないため金額(40列目)が常に0で、
+// 納品総数量(37列目、既存のqty)も0のままのことが多い。この場合は「受注総数量×原価」
+// で評価する。判定は「手配区分=在庫」かつ「納入先名1が実在の得意先ではなく自社拠点/
+// 倉庫(『太幸○○』のような名前)」の行。得意先コードの頭2桁が拠点コードという規則も
+// あるが、拠点9(長野)が「09」始まりになるなど桁合わせで拠点91と紛らわしいため、
+// 判定には使わない。
 
 export type SalesRowInsert = {
   order_no: string | null;
@@ -46,6 +55,8 @@ export type SalesRowInsert = {
   delivery_note_line: string | null;
   shipping_code: string | null;
   shipping_name: string | null;
+  delivery_dest_name: string | null;
+  order_qty: number | null;
 };
 
 export type PurchaseRowInsert = {
@@ -165,6 +176,8 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     delivery_note_line: textOrNull(cols, 16),
     shipping_code: textOrNull(cols, 42),
     shipping_name: textOrNull(cols, 43),
+    delivery_dest_name: textOrNull(cols, 7),
+    order_qty: numOrNull(cols, 34),
   };
 }
 
