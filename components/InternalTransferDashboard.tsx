@@ -18,6 +18,68 @@ function uniqueSortedNumeric(values: (string | null | undefined)[]): string[] {
   });
 }
 
+function csvEscape(v: unknown): string {
+  const s = v === null || v === undefined ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// 出荷場所コード/仕入先コードの名称(例:「太幸　鳴尾倉庫」「株式会社　太幸　広島」)から、
+// 社名・会社形態部分を取り除いて短い地名だけを取り出す。あくまで表示を見やすくするためのもので、
+// 判定や集計のキーには使わない(集計・突合には常にコード自体を使う)。
+function cleanLocName(name: string | null | undefined): string {
+  if (!name) return "—";
+  const stripped = name
+    .replace(/^(株式会社|㈱)\s*/u, "")
+    .replace(/^太幸\s*/u, "")
+    .trim();
+  return stripped || name.trim();
+}
+
+// 拠点コード(出荷場所コード/仕入先コード)の名前空間は営業所コードとは別物で、
+// かつコード「1」が拠点コード1(大阪)ではなく鳴尾倉庫を指すなど紛らわしい例外がある
+// (2026-07-31、ユーザーと確認済み)。画面・CSVのどちらでも、名称だけでなく必ず
+// 実際のコード番号を併記することで、どちらの拠点コードなのか誤読しないようにする。
+function locLabel(locCode: string | null | undefined, locName: string | null | undefined): string {
+  const cleaned = cleanLocName(locName);
+  if (!locCode || locCode === "—") return cleaned;
+  return `${cleaned}(${locCode})`;
+}
+
+// 確定分(売上データ由来)と未納品(受注データ由来)を、拠点×場所コードで合算する。
+// 元の「202606 社内間.xlsx」は両方をまとめた1本の内訳表だったため、CSV出力もそれに合わせる。
+function mergeGroups(a: BranchGroup[], b: BranchGroup[]): BranchGroup[] {
+  const byBranch = new Map<string, Map<string, { locName: string; amount: number }>>();
+  for (const groups of [a, b]) {
+    for (const g of groups) {
+      if (!byBranch.has(g.branchCode)) byBranch.set(g.branchCode, new Map());
+      const locs = byBranch.get(g.branchCode)!;
+      for (const l of g.locs) {
+        const key = `${l.locCode}::${l.locName}`;
+        const existing = locs.get(key);
+        if (existing) {
+          existing.amount += l.amount;
+        } else {
+          locs.set(key, { locName: l.locName, amount: l.amount });
+        }
+      }
+    }
+  }
+  const result: BranchGroup[] = [];
+  for (const [branchCode, locs] of byBranch) {
+    const locArr = Array.from(locs.entries())
+      .map(([key, v]) => ({ locCode: key.split("::")[0], locName: v.locName, amount: v.amount }))
+      .sort((x, y) => y.amount - x.amount);
+    const subtotal = locArr.reduce((s, l) => s + l.amount, 0);
+    result.push({ branchCode, subtotal, locs: locArr });
+  }
+  return result.sort((x, y) => {
+    const nx = Number(x.branchCode);
+    const ny = Number(y.branchCode);
+    if (Number.isFinite(nx) && Number.isFinite(ny)) return nx - ny;
+    return x.branchCode.localeCompare(y.branchCode, "ja");
+  });
+}
+
 function shiftMonths(dateStr: string, months: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   let fy = y;
@@ -152,6 +214,41 @@ export default function InternalTransferDashboard({
   const confirmedTotal = confirmedGroups.reduce((s, g) => s + g.subtotal, 0);
   const pendingTotal = pendingGroups.reduce((s, g) => s + g.subtotal, 0);
 
+  // 確定分＋未納品を拠点×場所で合算したもの。元データ(202606 社内間.xlsx)と
+  // 同じ「営業所コード・場所・金額」の形でCSV出力するために使う。
+  const combinedGroups = useMemo(() => mergeGroups(confirmedGroups, pendingGroups), [confirmedGroups, pendingGroups]);
+
+  function downloadCsv() {
+    if (!combinedGroups.length) return;
+    const lines: string[] = [["営業所コード", "場所", "金額"].map(csvEscape).join(",")];
+    let grandTotal = 0;
+    combinedGroups.forEach((g) => {
+      g.locs.forEach((l, i) => {
+        lines.push(
+          [i === 0 ? g.branchCode : "", locLabel(l.locCode, l.locName), Math.round(l.amount)]
+            .map(csvEscape)
+            .join(",")
+        );
+      });
+      lines.push(["", "", Math.round(g.subtotal)].map(csvEscape).join(","));
+      lines.push(["", "", ""].map(csvEscape).join(","));
+      grandTotal += g.subtotal;
+    });
+    lines.push(["総計", "", Math.round(grandTotal)].map(csvEscape).join(","));
+
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const periodLabel = dateFrom || dateTo ? `${dateFrom || "全期間"}〜${dateTo || "現在"}` : "全期間";
+    const branchSuffix = branch ? `_拠点${branch}` : "";
+    a.download = `社内間金額_${periodLabel}${branchSuffix}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   const pendingSnapshotAt = useMemo(() => {
     const dates = pendingRows.map((r) => r.created_at).filter(Boolean);
     return dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null;
@@ -195,7 +292,7 @@ export default function InternalTransferDashboard({
                         {branchLabel(g.branchCode)}
                       </td>
                     )}
-                    <td>{l.locName}</td>
+                    <td>{locLabel(l.locCode, l.locName)}</td>
                     <td className="num">{fmtYen(l.amount)}</td>
                   </tr>
                 ))}
@@ -269,6 +366,14 @@ export default function InternalTransferDashboard({
               <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPeriod(""); }} />
             </div>
           </div>
+        </div>
+        <div className="filter-actions">
+          <button className="ghost-btn" onClick={downloadCsv} disabled={!combinedGroups.length}>
+            確定分＋未納品を合算してCSVでダウンロード(202606社内間.xlsxと同じ形式)
+          </button>
+          <span className="result-count">
+            対象拠点数 {combinedGroups.length.toLocaleString("ja-JP")} ／ 合計 {fmtYen(confirmedTotal + pendingTotal)}
+          </span>
         </div>
       </div>
 

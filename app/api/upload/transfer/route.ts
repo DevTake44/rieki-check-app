@@ -28,6 +28,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 念のための防御的な重複除去。受注番号+受注行番号が同じ行が万一2重に
+  // 含まれていた場合(基幹システム側の出力ミス・同じファイルの誤った2重貼り付けなど)、
+  // そのまま挿入すると金額が2重計上されてしまう。実際にサンプルファイルで確認した限りでは
+  // 重複は無かったが、将来のファイルでも重複が無い保証は無いため、ここで
+  // (order_no, order_line) をキーに1つに絞ってから挿入する。
+  // order_no が無い行(通常は発生しない想定)は、誤って別の行を巻き込んで消さないよう
+  // 重複判定の対象外とし、そのまま残す。
+  const seen = new Set<string>();
+  const deduped: TransferRowInsert[] = [];
+  let duplicatesRemoved = 0;
+  for (const r of rows) {
+    if (!r.order_no) {
+      deduped.push(r);
+      continue;
+    }
+    const key = `${r.order_no}::${r.order_line ?? ""}`;
+    if (seen.has(key)) {
+      duplicatesRemoved++;
+      continue;
+    }
+    seen.add(key);
+    deduped.push(r);
+  }
+
   const supabase = getSupabaseServerClient();
 
   // 全件洗い替え: 既存行をすべて削除してから、新しいスナップショットを挿入する。
@@ -39,16 +63,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `既存データの削除に失敗しました: ${deleteError.message}` }, { status: 500 });
   }
 
-  if (rows.length === 0) {
-    return NextResponse.json({ inserted: 0 });
+  if (deduped.length === 0) {
+    return NextResponse.json({ inserted: 0, duplicatesRemoved });
   }
 
   const { error: insertError, count } = await supabase
     .from("stock_transfer_pending")
-    .insert(rows, { count: "exact" });
+    .insert(deduped, { count: "exact" });
   if (insertError) {
     return NextResponse.json({ error: `挿入に失敗しました: ${insertError.message}` }, { status: 500 });
   }
 
-  return NextResponse.json({ inserted: count ?? rows.length });
+  return NextResponse.json({ inserted: count ?? deduped.length, duplicatesRemoved });
 }

@@ -19,6 +19,7 @@ type Status = {
   finished: boolean;
   refreshing: boolean;
   refreshed: boolean;
+  duplicatesRemoved: number | null;
 };
 
 const BATCH_SIZE = 1000;
@@ -36,6 +37,7 @@ function initialStatus(): Status {
     finished: false,
     refreshing: false,
     refreshed: false,
+    duplicatesRemoved: null,
   };
 }
 
@@ -151,6 +153,7 @@ export default function UploadForm() {
     if (kind === "transfer") {
       // 全件洗い替え方式。件数が少ない想定なので分割せず1回で送る。
       setStatus((s) => ({ ...s, totalRows: mapped.length, totalBatches: 1 }));
+      let duplicatesRemoved: number | null = null;
       try {
         const res = await fetch(endpoint, {
           method: "POST",
@@ -161,12 +164,13 @@ export default function UploadForm() {
         if (!res.ok) {
           errors.push(json.error ?? res.statusText);
         } else {
-          sent = mapped.length;
+          sent = typeof json.inserted === "number" ? json.inserted : mapped.length;
+          duplicatesRemoved = typeof json.duplicatesRemoved === "number" ? json.duplicatesRemoved : null;
         }
       } catch (e) {
         errors.push(String(e));
       }
-      setStatus((s) => ({ ...s, sentRows: sent, doneBatches: 1, errors: [...errors] }));
+      setStatus((s) => ({ ...s, sentRows: sent, doneBatches: 1, errors: [...errors], duplicatesRemoved }));
       setStatus((s) => ({ ...s, running: false, finished: true }));
       return;
     }
@@ -252,6 +256,11 @@ export default function UploadForm() {
                   ? `完了しました。既存データを削除し、${status.sentRows.toLocaleString("ja-JP")}件で置き換えました。`
                   : "完了しました。"}
                 {status.refreshed && "値上げ検知の集計も更新済みです。"}
+                {replaceMode && status.duplicatesRemoved !== null && status.duplicatesRemoved > 0 && (
+                  <div style={{ color: "var(--direct)" }}>
+                    うち、受注番号・受注行番号が重複していた{status.duplicatesRemoved.toLocaleString("ja-JP")}件は自動的に1件にまとめて取り込みました(金額の二重計上を防止)。
+                  </div>
+                )}
               </div>
             )}
             {status.errors.length > 0 && (
@@ -286,7 +295,7 @@ export default function UploadForm() {
       {renderBlock(
         "transfer",
         "社内間(未納品の拠点間移動)",
-        "受注出力CSV(受注データ、売上データと同じ54列構成)を選択してください。手配区分=在庫かつ納入先名1に「太幸」を含む行だけを取り込みます。アップロードのたびに既存データを全件削除してから置き換えます(今この瞬間のスナップショットとして扱うため)。",
+        "受注出力CSV(受注データ、売上データと同じ54列構成)を選択してください。手配区分=在庫かつ納入先名1に「太幸」を含む行だけを取り込みます。アップロードのたびに既存データを全件削除してから置き換えます(今この瞬間のスナップショットとして扱うため)。受注番号・受注行番号が同じ行が万一含まれていても自動的に1件にまとめるため、重複計上の心配はありません。",
         transferStatus,
         true
       )}
