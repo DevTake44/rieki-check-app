@@ -206,8 +206,8 @@ export default function InternalTransferDashboard({
   const [branch, setBranch] = useState("");
   const [periodKey, setPeriodKey] = useState(() => (availablePeriods[0] ?? ""));
 
-  const { dateFrom, dateTo } = useMemo(() => {
-    if (!periodKey) return { dateFrom: "", dateTo: "" };
+  const { from: dateFrom, to: dateTo } = useMemo(() => {
+    if (!periodKey) return { from: "", to: "" };
     return periodRangeFor(periodKey);
   }, [periodKey]);
 
