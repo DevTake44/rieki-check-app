@@ -7,9 +7,16 @@ export const dynamic = "force-dynamic";
 
 // Supabase/PostgREST は .range() を付けないと最大1000件までしか返さない
 // (2026-07-31、値上げ検知ダッシュボードで実際にハマった問題と同じ)。
-// v_profit_by_order は受注番号単位で約75,000件あるため、まず件数を取得してから
-// 並列でページ取得することで、逐次ループより読み込みを速くする。
+// v_profit_by_order は受注番号単位で約75,000件あるため、まず件数を取得してからページ取得する。
+//
+// 注意(2026-08-03に判明): v_profit_by_order は現在マテリアライズドビュー化済み
+// (受注番号にユニークインデックスあり)なので1ページの取得自体は速いが、念のため
+// 一度に全ページを並列実行(最大76並列)するのは避け、少数ずつ束ねて取得する。
+// これは、以前 v_profit_by_order がマテリアライズドビュー化される前、全ページ並列取得が
+// Supabase側の同時実行数・statement_timeoutを超えてタイムアウトを引き起こした
+// (canceling statement due to statement timeout)実例があったための保険。
 const PAGE_SIZE = 1000;
+const CONCURRENCY = 8;
 
 async function fetchAllProfitOrders(
   supabase: ReturnType<typeof getSupabaseServerClient>
@@ -25,19 +32,21 @@ async function fetchAllProfitOrders(
   const pageStarts: number[] = [];
   for (let from = 0; from < total; from += PAGE_SIZE) pageStarts.push(from);
 
-  const results = await Promise.all(
-    pageStarts.map((from) =>
-      supabase
-        .from("v_profit_by_order")
-        .select("*")
-        .range(from, from + PAGE_SIZE - 1)
-    )
-  );
-
   const rows: ProfitOrder[] = [];
-  for (const r of results) {
-    if (r.error) return { rows: [], error: r.error };
-    if (r.data) rows.push(...(r.data as ProfitOrder[]));
+  for (let i = 0; i < pageStarts.length; i += CONCURRENCY) {
+    const batch = pageStarts.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      batch.map((from) =>
+        supabase
+          .from("v_profit_by_order")
+          .select("*")
+          .range(from, from + PAGE_SIZE - 1)
+      )
+    );
+    for (const r of results) {
+      if (r.error) return { rows: [], error: r.error };
+      if (r.data) rows.push(...(r.data as ProfitOrder[]));
+    }
   }
   return { rows, error: null };
 }
