@@ -2,7 +2,8 @@
 
 import { Fragment, useMemo, useState } from "react";
 import type { InternalTransferLine, TransferPendingLine } from "@/lib/types";
-import { branchLabel } from "@/lib/branch-names";
+import { branchLabel, BRANCH_NAMES } from "@/lib/branch-names";
+import { SUPPLIER_LOCATIONS } from "@/lib/supplier-locations";
 
 function fmtYen(v: number | null | undefined) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -23,30 +24,53 @@ function csvEscape(v: unknown): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-// 出荷場所コード/仕入先コードの名称(例:「太幸　鳴尾倉庫」「株式会社　太幸　広島」)から、
-// 社名・会社形態部分を取り除いて短い地名だけを取り出す。あくまで表示を見やすくするためのもので、
-// 判定や集計のキーには使わない(集計・突合には常にコード自体を使う)。
-function cleanLocName(name: string | null | undefined): string {
-  if (!name) return "—";
-  const stripped = name
-    .replace(/^(株式会社|㈱)\s*/u, "")
-    .replace(/^太幸\s*/u, "")
-    .trim();
-  return stripped || name.trim();
+// 「場所」を、実際の拠点として一意に特定できる形(resolvedCode, resolvedLabel)に変換する。
+//
+// 2026-08-03、ユーザーとのやり取りで判明した重要な事実:
+// ・出荷場所コード(在庫区分)は拠点コードがそのまま入っている(ユーザー確認済み)。
+//   例外はコード「1」だけで、拠点コード1(大阪)ではなく鳴尾倉庫を指す
+//   (大阪と鳴尾倉庫が同じ場所にあり、コードを共有しているため)。
+// ・仕入先コード(メーカー直送・手配区分)は拠点コードとは全く別の名前空間で、数字が
+//   同じでも意味が違う(出荷場所コード21=東京だが、仕入先コード21=金沢、など)。
+//   仕入先コードから拠点を判断するには専用のマスタ(SUPPLIER_LOCATIONS、ユーザー提供の
+//   「仕入先マスタ.csv」を反映)が必要で、名称だけでは判断できない
+//   (「株式会社　太幸」という表記だけの行が大半で、地名が入っていない)。
+// ・仕入先コードは「昔からのコード」と「100+拠点コード」で新しく作ったコードの2種類が
+//   同じ拠点を指すことが多い(例: 12と121はどちらも東京)。集計時は両方を同じ拠点として
+//   まとめる。
+function resolveLoc(
+  isShipping: boolean,
+  locCode: string | null | undefined,
+  locName: string | null | undefined
+): { code: string; label: string } {
+  if (!locCode) return { code: "—", label: locName?.trim() || "—" };
+
+  if (isShipping) {
+    if (locCode === "1") return { code: "1", label: "鳴尾倉庫" };
+    const known = BRANCH_NAMES[locCode];
+    if (known) return { code: locCode, label: known };
+    return { code: locCode, label: locName?.trim() || `拠点不明(${locCode})` };
+  }
+
+  const entry = SUPPLIER_LOCATIONS[locCode];
+  if (entry) {
+    if (entry.branchCode) {
+      return { code: entry.branchCode, label: BRANCH_NAMES[entry.branchCode] ?? entry.name };
+    }
+    return { code: locCode, label: entry.name };
+  }
+  return { code: locCode, label: `拠点不明(${locCode})` };
 }
 
-// 拠点コード(出荷場所コード/仕入先コード)の名前空間は営業所コードとは別物で、
-// かつコード「1」が拠点コード1(大阪)ではなく鳴尾倉庫を指すなど紛らわしい例外がある
-// (2026-07-31、ユーザーと確認済み)。画面・CSVのどちらでも、名称だけでなく必ず
-// 実際のコード番号を併記することで、どちらの拠点コードなのか誤読しないようにする。
-function locLabel(locCode: string | null | undefined, locName: string | null | undefined): string {
-  const cleaned = cleanLocName(locName);
-  if (!locCode || locCode === "—") return cleaned;
-  return `${cleaned}(${locCode})`;
+function formatLoc(code: string, label: string): string {
+  if (!code || code === "—") return label;
+  return `${label}(${code})`;
 }
 
 // 確定分(売上データ由来)と未納品(受注データ由来)を、拠点×場所コードで合算する。
 // 元の「202606 社内間.xlsx」は両方をまとめた1本の内訳表だったため、CSV出力もそれに合わせる。
+// locCode は既に resolveLoc() で解決済みの「本当の拠点コード」なので、これだけをキーに
+// まとめれば十分(同じ拠点を指す別コードは groupByBranchAndLoc の時点で既に1つにまとまっている)。
 function mergeGroups(a: BranchGroup[], b: BranchGroup[]): BranchGroup[] {
   const byBranch = new Map<string, Map<string, { locName: string; amount: number }>>();
   for (const groups of [a, b]) {
@@ -54,12 +78,11 @@ function mergeGroups(a: BranchGroup[], b: BranchGroup[]): BranchGroup[] {
       if (!byBranch.has(g.branchCode)) byBranch.set(g.branchCode, new Map());
       const locs = byBranch.get(g.branchCode)!;
       for (const l of g.locs) {
-        const key = `${l.locCode}::${l.locName}`;
-        const existing = locs.get(key);
+        const existing = locs.get(l.locCode);
         if (existing) {
           existing.amount += l.amount;
         } else {
-          locs.set(key, { locName: l.locName, amount: l.amount });
+          locs.set(l.locCode, { locName: l.locName, amount: l.amount });
         }
       }
     }
@@ -67,7 +90,7 @@ function mergeGroups(a: BranchGroup[], b: BranchGroup[]): BranchGroup[] {
   const result: BranchGroup[] = [];
   for (const [branchCode, locs] of byBranch) {
     const locArr = Array.from(locs.entries())
-      .map(([key, v]) => ({ locCode: key.split("::")[0], locName: v.locName, amount: v.amount }))
+      .map(([locCode, v]) => ({ locCode, locName: v.locName, amount: v.amount }))
       .sort((x, y) => y.amount - x.amount);
     const subtotal = locArr.reduce((s, l) => s + l.amount, 0);
     result.push({ branchCode, subtotal, locs: locArr });
@@ -80,15 +103,45 @@ function mergeGroups(a: BranchGroup[], b: BranchGroup[]): BranchGroup[] {
   });
 }
 
-function shiftMonths(dateStr: string, months: number): string {
+// 元データ(202606 社内間.xlsx)と同じ「20日締め」の月単位で期間を扱う。
+// 例: 202606 は 5/21〜6/20。日付が21日以降ならその翌月の締め月に属する。
+// (2026-08-03、ユーザー指摘「直近も必要ない、20日締めで5月・6月のように月単位でしか出さない」への対応)
+function periodKeyFor(dateStr: string): string {
   const [y, m, d] = dateStr.split("-").map(Number);
+  let py = y;
+  let pm = m;
+  if (d > 20) {
+    pm += 1;
+    if (pm > 12) {
+      pm = 1;
+      py += 1;
+    }
+  }
+  return `${py}${String(pm).padStart(2, "0")}`;
+}
+
+function periodRangeFor(key: string): { from: string; to: string } {
+  const y = parseInt(key.slice(0, 4), 10);
+  const m = parseInt(key.slice(4, 6), 10);
   let fy = y;
-  let fm = m - months;
-  while (fm <= 0) {
-    fm += 12;
+  let fm = m - 1;
+  if (fm < 1) {
+    fm = 12;
     fy -= 1;
   }
-  return `${fy}-${String(fm).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return {
+    from: `${fy}-${String(fm).padStart(2, "0")}-21`,
+    to: `${y}-${String(m).padStart(2, "0")}-20`,
+  };
+}
+
+function periodLabelFor(key: string): string {
+  const y = key.slice(0, 4);
+  const m = parseInt(key.slice(4, 6), 10);
+  const { from, to } = periodRangeFor(key);
+  const fromMd = from.slice(5).replace("-", "/");
+  const toMd = to.slice(5).replace("-", "/");
+  return `${y}年${m}月度(${fromMd}〜${toMd})`;
 }
 
 type BranchGroup = {
@@ -100,31 +153,28 @@ type BranchGroup = {
 function groupByBranchAndLoc<T>(
   rows: T[],
   getBranch: (r: T) => string | null,
-  getLocCode: (r: T) => string | null,
-  getLocName: (r: T) => string | null,
+  resolve: (r: T) => { code: string; label: string },
   getAmount: (r: T) => number
 ): BranchGroup[] {
   const byBranch = new Map<string, Map<string, { locName: string; amount: number }>>();
   for (const r of rows) {
     const b = getBranch(r);
     if (!b) continue;
-    const locCode = getLocCode(r) ?? "—";
-    const locName = getLocName(r) ?? "—";
+    const { code: locCode, label: locName } = resolve(r);
     const amount = getAmount(r) || 0;
     if (!byBranch.has(b)) byBranch.set(b, new Map());
     const locs = byBranch.get(b)!;
-    const key = `${locCode}::${locName}`;
-    const existing = locs.get(key);
+    const existing = locs.get(locCode);
     if (existing) {
       existing.amount += amount;
     } else {
-      locs.set(key, { locName, amount });
+      locs.set(locCode, { locName, amount });
     }
   }
   const result: BranchGroup[] = [];
   for (const [branchCode, locs] of byBranch) {
     const locArr = Array.from(locs.entries())
-      .map(([key, v]) => ({ locCode: key.split("::")[0], locName: v.locName, amount: v.amount }))
+      .map(([locCode, v]) => ({ locCode, locName: v.locName, amount: v.amount }))
       .sort((a, b) => b.amount - a.amount);
     const subtotal = locArr.reduce((s, l) => s + l.amount, 0);
     result.push({ branchCode, subtotal, locs: locArr });
@@ -144,15 +194,22 @@ export default function InternalTransferDashboard({
   confirmedRows: InternalTransferLine[];
   pendingRows: TransferPendingLine[];
 }) {
-  const maxDeliveryDate = useMemo(() => {
-    const dates = confirmedRows.map((r) => r.delivery_date).filter((d): d is string => !!d);
-    return dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null;
+  // 20日締めの月単位(202605, 202606, ...)で、データに実際に存在する期間だけを候補にする。
+  const availablePeriods = useMemo(() => {
+    const keys = new Set<string>();
+    confirmedRows.forEach((r) => {
+      if (r.delivery_date) keys.add(periodKeyFor(r.delivery_date));
+    });
+    return Array.from(keys).sort((a, b) => b.localeCompare(a)); // 新しい月が先
   }, [confirmedRows]);
 
   const [branch, setBranch] = useState("");
-  const [dateFrom, setDateFrom] = useState(() => (maxDeliveryDate ? shiftMonths(maxDeliveryDate, 1) : ""));
-  const [dateTo, setDateTo] = useState("");
-  const [period, setPeriod] = useState("1");
+  const [periodKey, setPeriodKey] = useState(() => (availablePeriods[0] ?? ""));
+
+  const { dateFrom, dateTo } = useMemo(() => {
+    if (!periodKey) return { dateFrom: "", dateTo: "" };
+    return periodRangeFor(periodKey);
+  }, [periodKey]);
 
   const branches = useMemo(
     () =>
@@ -162,17 +219,6 @@ export default function InternalTransferDashboard({
       ]),
     [confirmedRows, pendingRows]
   );
-
-  function applyPeriod(key: string) {
-    setPeriod(key);
-    if (key === "all" || !maxDeliveryDate) {
-      setDateFrom("");
-      setDateTo("");
-    } else {
-      setDateFrom(shiftMonths(maxDeliveryDate, parseInt(key, 10)));
-      setDateTo("");
-    }
-  }
 
   const filteredConfirmed = useMemo(() => {
     return confirmedRows.filter(
@@ -192,8 +238,7 @@ export default function InternalTransferDashboard({
       groupByBranchAndLoc(
         filteredConfirmed,
         (r) => r.branch_code,
-        (r) => r.loc_code,
-        (r) => r.loc_name,
+        (r) => resolveLoc(r.arrange_type === "在庫", r.loc_code, r.loc_name),
         (r) => r.amount
       ),
     [filteredConfirmed]
@@ -204,8 +249,9 @@ export default function InternalTransferDashboard({
       groupByBranchAndLoc(
         filteredPending,
         (r) => r.branch_code,
-        (r) => r.shipping_code,
-        (r) => r.shipping_name,
+        // 未納品(stock_transfer_pending)は常に「手配区分=在庫」の受注データだけを
+        // 取り込んでいるので、出荷場所コードは常に拠点コードそのもの(isShipping=true)。
+        (r) => resolveLoc(true, r.shipping_code, r.shipping_name),
         (r) => (r.order_qty ?? 0) * (r.assumed_cost ?? 0)
       ),
     [filteredPending]
@@ -225,7 +271,7 @@ export default function InternalTransferDashboard({
     combinedGroups.forEach((g) => {
       g.locs.forEach((l, i) => {
         lines.push(
-          [i === 0 ? g.branchCode : "", locLabel(l.locCode, l.locName), Math.round(l.amount)]
+          [i === 0 ? g.branchCode : "", formatLoc(l.locCode, l.locName), Math.round(l.amount)]
             .map(csvEscape)
             .join(",")
         );
@@ -240,7 +286,7 @@ export default function InternalTransferDashboard({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const periodLabel = dateFrom || dateTo ? `${dateFrom || "全期間"}〜${dateTo || "現在"}` : "全期間";
+    const periodLabel = periodKey || "全期間";
     const branchSuffix = branch ? `_拠点${branch}` : "";
     a.download = `社内間金額_${periodLabel}${branchSuffix}.csv`;
     document.body.appendChild(a);
@@ -292,7 +338,7 @@ export default function InternalTransferDashboard({
                         {branchLabel(g.branchCode)}
                       </td>
                     )}
-                    <td>{locLabel(l.locCode, l.locName)}</td>
+                    <td>{formatLoc(l.locCode, l.locName)}</td>
                     <td className="num">{fmtYen(l.amount)}</td>
                   </tr>
                 ))}
@@ -324,7 +370,8 @@ export default function InternalTransferDashboard({
         </div>
       </div>
       <p className="subtitle">
-        確定分(在庫区分×出荷場所コード、メーカー直送・手配区分×仕入先コード、いずれも1〜199)＋未納品(受注データ、手配区分=在庫かつ納入先名1に「太幸」を含む)の合算です。
+        確定分(在庫区分×出荷場所コード、メーカー直送・手配区分×仕入先コード、いずれも1〜199。運賃・値引き・経費のコードは対象外)＋未納品(受注データ、手配区分=在庫かつ納入先名1に「太幸」を含む)の合算です。
+        出荷場所コードはそのまま拠点コード、仕入先コードは仕入先マスタで別途拠点に変換しており、同じ拠点を指す複数のコード(例: 仕入先コード12と121はどちらも東京)はまとめて表示しています。
         {pendingSnapshotAt && (
           <> 未納品スナップショット取得: {new Date(pendingSnapshotAt).toLocaleString("ja-JP")}</>
         )}
@@ -345,25 +392,28 @@ export default function InternalTransferDashboard({
             </select>
           </div>
           <div className="filter-field" style={{ gridColumn: "span 3" }}>
-            <label>期間(納品日、確定分のみに適用。未納品は常に最新スナップショット)</label>
+            <label>期間(20日締め・確定分のみに適用。未納品は常に最新スナップショット)</label>
             <div className="segmented">
-              {[
-                ["all", "全期間"],
-                ["1", "直近1か月"],
-                ["3", "直近3か月"],
-                ["6", "直近6か月"],
-              ].map(([key, label]) => (
+              <button
+                type="button"
+                className={periodKey === "" ? "active" : ""}
+                onClick={() => setPeriodKey("")}
+              >
+                全期間
+              </button>
+              {availablePeriods.map((key) => (
                 <button
                   key={key}
                   type="button"
-                  className={period === key ? "active" : ""}
-                  onClick={() => applyPeriod(key)}
+                  className={periodKey === key ? "active" : ""}
+                  onClick={() => setPeriodKey(key)}
                 >
-                  {label}
+                  {periodLabelFor(key)}
                 </button>
               ))}
-              <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPeriod(""); }} />
-              <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPeriod(""); }} />
+              {availablePeriods.length === 0 && (
+                <span className="result-count">確定分データがまだありません</span>
+              )}
             </div>
           </div>
         </div>
