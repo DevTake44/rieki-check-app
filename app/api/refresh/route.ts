@@ -9,15 +9,29 @@ export const dynamic = "force-dynamic";
 // デプロイ時にエラーになる場合は、契約プランの上限まで下げてください。
 export const maxDuration = 300;
 /**
- * v_price_increase_matched / v_price_increase_alerts はマテリアライズドビューなので、
- * sales_lines / purchase_lines を更新した後は、このAPIを呼んで再集計(REFRESH)する必要がある。
+ * v_price_increase_matched / v_price_increase_alerts / v_profit_lines はいずれも
+ * マテリアライズドビューなので、sales_lines / purchase_lines を更新した後は、
+ * このAPIを呼んで再集計(REFRESH)する必要がある。
  * (CSVアップロード完了後に自動的に呼ばれる。手動で叩いても良い。)
+ *
+ * 2026-08-03追記: 売上利益ダッシュボード(v_profit_lines、v_profit_by_orderの元になる
+ * マテリアライズドビュー)を追加した際、通常のビューのままだと画面を開くたびに
+ * (かつページング取得で並列に何十回も)重い集計SQLが再実行されてタイムアウトする問題が
+ * 発生したため、こちらもマテリアライズドビュー化した。同じ理由でこのAPIでの
+ * 再集計対象に追加している。
  */
 export async function POST() {
   const supabase = getSupabaseServerClient();
-  const { error } = await supabase.rpc("refresh_price_increase_views");
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { error: priceIncreaseError } = await supabase.rpc("refresh_price_increase_views");
+  if (priceIncreaseError) {
+    return NextResponse.json({ error: priceIncreaseError.message }, { status: 500 });
   }
+
+  const { error: profitError } = await supabase.rpc("refresh_profit_views");
+  if (profitError) {
+    return NextResponse.json({ error: profitError.message }, { status: 500 });
+  }
+
   return NextResponse.json({ refreshed: true });
 }

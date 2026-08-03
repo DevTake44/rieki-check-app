@@ -197,7 +197,7 @@ export default function UploadForm() {
       setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors] }));
     }
 
-    // アップロードが1件でも成功していれば、値上げ検知の集計(マテリアライズドビュー)を更新する
+    // アップロードが1件でも成功していれば、値上げ検知・売上利益の集計(マテリアライズドビュー)を更新する
     if (sent > 0) {
       setStatus((s) => ({ ...s, refreshing: true }));
       const refreshError = await callRefreshApi();
@@ -247,7 +247,7 @@ export default function UploadForm() {
             )}
             {status.refreshing && (
               <div style={{ color: "var(--direct)", marginTop: 4 }}>
-                値上げ検知の集計を更新中…(数十秒かかる場合があります)
+                値上げ検知・売上利益の集計を更新中…(数十秒かかる場合があります)
               </div>
             )}
             {status.finished && status.errors.length === 0 && (
@@ -255,7 +255,7 @@ export default function UploadForm() {
                 {replaceMode
                   ? `完了しました。既存データを削除し、${status.sentRows.toLocaleString("ja-JP")}件で置き換えました。`
                   : "完了しました。"}
-                {status.refreshed && "値上げ検知の集計も更新済みです。"}
+                {status.refreshed && "値上げ検知・売上利益の集計も更新済みです。"}
                 {replaceMode && status.duplicatesRemoved !== null && status.duplicatesRemoved > 0 && (
                   <div style={{ color: "var(--direct)" }}>
                     うち、受注番号・受注行番号が重複していた{status.duplicatesRemoved.toLocaleString("ja-JP")}件は自動的に1件にまとめて取り込みました(金額の二重計上を防止)。
