@@ -59,6 +59,26 @@ export type SalesRowInsert = {
   order_qty: number | null;
 };
 
+// 受注出力CSV(社内間・未納品の拠点間移動を拾うためのもの)から
+// stock_transfer_pending テーブルへ変換する型。列構成はsales_lines用と同じ
+// (0始まり、7=納入先名1, 21=受注年月日, 23=営業所コード, 27=品番, 29=品名,
+//  34=受注総数量, 37=納品総数量, 49=手配区分, 53=原価)。
+export type TransferRowInsert = {
+  order_no: string | null;
+  order_line: string | null;
+  order_date: string | null;
+  branch_code: string | null;
+  shipping_code: string | null;
+  shipping_name: string | null;
+  delivery_dest_name: string | null;
+  customer_name: string | null;
+  item_code: string | null;
+  item_name: string | null;
+  order_qty: number | null;
+  delivery_qty: number | null;
+  assumed_cost: number | null;
+};
+
 export type PurchaseRowInsert = {
   order_no: string | null;
   order_line: string | null;
@@ -178,6 +198,38 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     shipping_name: textOrNull(cols, 43),
     delivery_dest_name: textOrNull(cols, 7),
     order_qty: numOrNull(cols, 34),
+  };
+}
+
+// 受注出力CSVの行を、社内間(未納品の拠点間移動)候補としてフィルタする。
+// 条件(2026-07-31にユーザーと確認済み): 手配区分=在庫 かつ 納入先名1に「太幸」を
+// 含む(＝納入先が実在の外部得意先ではなく自社拠点/倉庫)行だけを対象とする。
+// この関数を通過する行は少数(実データで1777行中60行程度)になる想定で、
+// stock_transfer_pending テーブルはアップロードのたびに全件洗い替えする。
+export function mapTransferRow(cols: string[]): TransferRowInsert | null {
+  if (isBlankRow(cols)) return null;
+  if (cols.length < MIN_SALES_COLS) return null;
+
+  const arrange_type = textOrNull(cols, 49);
+  if (arrange_type !== "在庫") return null;
+
+  const delivery_dest_name = textOrNull(cols, 7);
+  if (!delivery_dest_name || !delivery_dest_name.includes("太幸")) return null;
+
+  return {
+    order_no: textOrNull(cols, 11),
+    order_line: textOrNull(cols, 12),
+    order_date: dateOrNull(cols, 21),
+    branch_code: textOrNull(cols, 23),
+    shipping_code: textOrNull(cols, 42),
+    shipping_name: textOrNull(cols, 43),
+    delivery_dest_name,
+    customer_name: textOrNull(cols, 2),
+    item_code: textOrNull(cols, 27),
+    item_name: textOrNull(cols, 29),
+    order_qty: numOrNull(cols, 34),
+    delivery_qty: numOrNull(cols, 37),
+    assumed_cost: numOrNull(cols, 53),
   };
 }
 

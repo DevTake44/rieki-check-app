@@ -250,6 +250,9 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
           >
             商品単価検索を開く
           </a>
+          <a href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
+            社内間金額
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>
