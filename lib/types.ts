@@ -37,6 +37,22 @@ export type InternalTransferLine = {
   amount: number;
 };
 
+// public.v_profit_by_order ビューの1行の型(利益ダッシュボード・受注番号単位)
+export type ProfitOrder = {
+  order_no: string;
+  customer_code: string | null;
+  customer_name: string | null;
+  project_name: string | null;
+  rep_code: string | null;
+  branch_code: string | null;
+  order_date: string | null;
+  delivery_date: string | null;
+  line_count: number;
+  revenue: number;
+  cost: number;
+  profit: number;
+};
+
 // public.stock_transfer_pending テーブルの1行の型(社内間金額・未納品スナップショット)
 export type TransferPendingLine = {
   id: number;

@@ -2,10 +2,11 @@
 // Supabaseのテーブル(sales_lines / purchase_lines)にそのまま insert/upsert できる形へ変換する。
 //
 // 列番号(0始まり)は、過去にPythonで解析した際に確定させたものと同じ。
-// 売上側: 2=得意先名1, 11=受注番号, 12=受注行番号, 15=納品書番号, 16=納品書行数,
-//         21=受注年月日, 22=納品年月日, 23=営業所コード, 24=営業担当, 27=品番, 29=品名,
-//         34=受注総数量, 37=納品総数量, 39=販売単価, 40=金額, 42=出荷場所コード(AQ列),
-//         43=出荷場所名(AR列), 49=手配区分, 50=仕入先コード(AY列), 51=仕入先名1, 53=原価(BB列)
+// 売上側: 0=得意先コード, 2=得意先名1, 11=受注番号, 12=受注行番号, 15=納品書番号,
+//         16=納品書行数, 21=受注年月日, 22=納品年月日, 23=営業所コード, 24=営業担当,
+//         27=品番, 29=品名, 34=受注総数量, 37=納品総数量, 39=販売単価, 40=金額,
+//         42=出荷場所コード(AQ列), 43=出荷場所名(AR列), 46=件名(物件名), 49=手配区分,
+//         50=仕入先コード(AY列), 51=仕入先名1, 53=原価(BB列)
 // 仕入側: 2=仕入先名1, 15=仕入番号, 16=仕入行番号, 17=受注番号, 18=受注行番号,
 //         22=仕入年月日, 27=品番, 29=品名, 36=仕入バラ数, 39=単価, 52=得意先名1(納品先名)
 //
@@ -34,12 +35,20 @@
 // 倉庫(『太幸○○』のような名前)」の行。得意先コードの頭2桁が拠点コードという規則も
 // あるが、拠点9(長野)が「09」始まりになるなど桁合わせで拠点91と紛らわしいため、
 // 判定には使わない。
+//
+// 追加(2026-08-03、利益ダッシュボード機能のため): 得意先コード(0列目、customer_code)・
+// 件名(46列目、project_name)を新たに取り込む。得意先コードは得意先名だけでは表記ゆれで
+// 集計がずれる可能性があるため、得意先単位の集計キーとして使う。件名は「物件」(工事物件
+// 向けなどのまとめ売上)の識別に使う値で、通常の店舗向け売上では空欄のことが多い。
+// 「{件名}一式」行(受注番号=0・受注行番号=0、上で除外済み)は、この件名を使って複数の
+// 明細行をまとめた概算行だった。
 
 export type SalesRowInsert = {
   order_no: string | null;
   order_line: string | null;
   order_date: string | null;
   delivery_date: string | null;
+  customer_code: string | null;
   customer_name: string | null;
   supplier_name: string | null;
   supplier_code: string | null;
@@ -48,6 +57,7 @@ export type SalesRowInsert = {
   arrange_type: string | null;
   item_code: string | null;
   item_name: string | null;
+  project_name: string | null;
   qty: number | null;
   sell_price: number | null;
   assumed_cost: number | null;
@@ -181,6 +191,7 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     order_line,
     order_date,
     delivery_date: dateOrNull(cols, 22),
+    customer_code: textOrNull(cols, 0),
     customer_name: textOrNull(cols, 2),
     supplier_name: textOrNull(cols, 51),
     supplier_code: textOrNull(cols, 50),
@@ -189,6 +200,7 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
     arrange_type: textOrNull(cols, 49),
     item_code: textOrNull(cols, 27),
     item_name: textOrNull(cols, 29),
+    project_name: textOrNull(cols, 46),
     qty: numOrNull(cols, 37),
     sell_price: numOrNull(cols, 39),
     assumed_cost: numOrNull(cols, 53),

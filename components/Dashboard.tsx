@@ -253,6 +253,9 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
           <a href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
             社内間金額
           </a>
+          <a href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
+            売上利益
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>
