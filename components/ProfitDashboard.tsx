@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ProfitOrder } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
@@ -89,6 +89,104 @@ const DIMENSIONS: { key: Dimension; label: string }[] = [
 
 type SortKey = "revenue" | "profit";
 
+type MatDim = "branch" | "rep" | "customer";
+type MatMetric = "sales" | "cost" | "profit" | "margin" | "yoy";
+type MonthCell = { s: number; c: number };
+type MatRow = {
+  code: string;
+  name: string;
+  cur: MonthCell[]; // 12ヶ月(今期、10月始まり)
+  prev: MonthCell[]; // 12ヶ月(前期)
+  cur_ts: number;
+  cur_tc: number;
+  cur_tm: number | null;
+  prev_ts: number;
+  prev_tc: number;
+  prev_ts_same: number; // 前期のうち、今期と同じ月数分だけ
+  prev_tc_same: number;
+};
+
+const MAT_DIMENSIONS: { key: MatDim; label: string }[] = [
+  { key: "branch", label: "拠点" },
+  { key: "rep", label: "担当" },
+  { key: "customer", label: "得意先" },
+];
+
+const MAT_METRICS: { key: MatMetric; label: string }[] = [
+  { key: "sales", label: "売上" },
+  { key: "cost", label: "原価" },
+  { key: "profit", label: "利益" },
+  { key: "margin", label: "粗利率" },
+  { key: "yoy", label: "前年比" },
+];
+
+function fmtSigned(n: number) {
+  const r = Math.round(n);
+  return `${r >= 0 ? "+" : ""}${r.toLocaleString("ja-JP")}`;
+}
+
+function matMonthCell(metric: MatMetric, cur: MonthCell, prev: MonthCell) {
+  const s = cur.s;
+  if (metric === "sales") {
+    if (!s) return <span className="cell-sub">0</span>;
+    return <span>{Math.round(s).toLocaleString("ja-JP")}</span>;
+  }
+  if (metric === "cost") {
+    return <span>{Math.round(cur.c).toLocaleString("ja-JP")}</span>;
+  }
+  if (metric === "profit") {
+    if (!s && !cur.c) return <span className="cell-sub">0</span>;
+    const p = s - cur.c;
+    return (
+      <span style={{ color: p < 0 ? "var(--critical)" : "var(--good)", fontWeight: 600 }}>{fmtSigned(p)}</span>
+    );
+  }
+  if (metric === "margin") {
+    if (!s) return <span className="cell-sub">―</span>;
+    const m = ((s - cur.c) / s) * 100;
+    return <span style={{ color: m >= 10 ? "var(--good)" : "var(--critical)" }}>{m.toFixed(1)}%</span>;
+  }
+  // yoy: その月の今期売上 ÷ 前期同月売上
+  if (!prev.s) return <span className="cell-sub">―</span>;
+  const pct = (s / prev.s) * 100;
+  return <span style={{ color: pct >= 100 ? "var(--good)" : "var(--critical)" }}>{pct.toFixed(0)}%</span>;
+}
+
+function matTotalCell(metric: MatMetric, row: MatRow) {
+  if (metric === "sales") {
+    return <span style={{ fontWeight: 600 }}>{fmtYen(row.cur_ts)}</span>;
+  }
+  if (metric === "cost") {
+    return <span style={{ fontWeight: 600 }}>{fmtYen(row.cur_tc)}</span>;
+  }
+  if (metric === "profit") {
+    const p = row.cur_ts - row.cur_tc;
+    return (
+      <span style={{ color: p < 0 ? "var(--critical)" : "var(--good)", fontWeight: 700 }}>{fmtYen(p)}</span>
+    );
+  }
+  if (metric === "margin") {
+    if (row.cur_tm === null) return <span className="cell-sub">―</span>;
+    return (
+      <span style={{ color: row.cur_tm >= 10 ? "var(--good)" : "var(--critical)", fontWeight: 700 }}>
+        {row.cur_tm.toFixed(1)}%
+      </span>
+    );
+  }
+  // yoy: 総合計欄は「前期の同期間」との比較(上段)と「前期通期」の参考値(下段)の2段
+  const pctSame = row.prev_ts_same ? (row.cur_ts / row.prev_ts_same) * 100 : null;
+  return (
+    <div>
+      <div style={{ fontWeight: 700, color: pctSame === null ? undefined : pctSame >= 100 ? "var(--good)" : "var(--critical)" }}>
+        {pctSame === null ? "―" : `${pctSame.toFixed(0)}%`}
+      </div>
+      <div className="cell-sub" style={{ marginTop: 2 }}>
+        前期通期 {fmtYen(row.prev_ts)}
+      </div>
+    </div>
+  );
+}
+
 export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
   const maxOrderDate = useMemo(() => {
     const dates = orders.map((o) => o.order_date).filter((d): d is string => !!d);
@@ -136,7 +234,10 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
 
   type PeriodMode = "all" | "fy-current" | "fy-previous" | "month";
 
+  const filterCardRef = useRef<HTMLDivElement>(null);
+
   const [branch, setBranch] = useState("");
+  const [rep, setRep] = useState("");
   const [periodMode, setPeriodMode] = useState<PeriodMode>(() =>
     availableFiscalYears.length ? "fy-current" : "all"
   );
@@ -180,6 +281,7 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
 
   function resetFilters() {
     setBranch("");
+    setRep("");
     setSearch("");
     setDimension("order");
     setPeriodMode(availableFiscalYears.length ? "fy-current" : "all");
@@ -203,11 +305,13 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
   }, [periodMode, periodKey, currentFYStart, previousFYStart]);
 
   const branches = useMemo(() => uniqueSortedNumeric(orders.map((o) => o.branch_code)), [orders]);
+  const reps = useMemo(() => uniqueSortedNumeric(orders.map((o) => o.rep_code)), [orders]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return orders.filter((o) => {
       if (branch && o.branch_code !== branch) return false;
+      if (rep && o.rep_code !== rep) return false;
       if (dateFrom && (!o.delivery_date || o.delivery_date < dateFrom)) return false;
       if (dateTo && (!o.delivery_date || o.delivery_date > dateTo)) return false;
       if (q) {
@@ -216,49 +320,147 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       }
       return true;
     });
-  }, [orders, branch, dateFrom, dateTo, search]);
+  }, [orders, branch, rep, dateFrom, dateTo, search]);
 
-  // ---- 期ごとの売上一覧(得意先別・担当別、決算期1年分) ----
-  const [yearlyDimension, setYearlyDimension] = useState<"customer" | "rep">("customer");
-  const [yearlyFY, setYearlyFY] = useState<"current" | "previous">("current");
-  const yearlyFYStart = yearlyFY === "current" ? currentFYStart : previousFYStart;
-  const yearlyPeriods = useMemo(
-    () => (yearlyFYStart !== undefined ? fiscalYearPeriods(yearlyFYStart) : []),
-    [yearlyFYStart]
+  // ---- 経営マトリクス(拠点別・担当別・得意先別、決算期の今期/前期比較) ----
+  // sales-dashboardの「月別マトリクス」を参考にしつつ、rieki-check側だけが持っている
+  // 実際の利益(cost/profitは在庫出荷分も含めた実績)を主役にしている点が違い。
+  // sales-dashboardは月締めの売上・仕入データとしては正確だが、在庫出荷の原価が
+  // 反映されないため拠点別・担当別の「利益」は見られない。ここではそれが見られる。
+  const [matDim, setMatDim] = useState<MatDim>("branch");
+  const [matMetric, setMatMetric] = useState<MatMetric>("profit");
+  const [matSortKey, setMatSortKey] = useState<"name" | "total">("total");
+  const [matSortDir, setMatSortDir] = useState<1 | -1>(-1);
+  const [matFilter, setMatFilter] = useState("");
+
+  const matCurPeriods = useMemo(
+    () => (currentFYStart !== undefined ? fiscalYearPeriods(currentFYStart) : []),
+    [currentFYStart]
+  );
+  const matPrevPeriods = useMemo(
+    () => (previousFYStart !== undefined ? fiscalYearPeriods(previousFYStart) : []),
+    [previousFYStart]
   );
 
-  type YearlyRow = { key: string; label: string; byPeriod: Record<string, number>; total: number };
-
-  const yearlyRows: YearlyRow[] = useMemo(() => {
-    if (yearlyFYStart === undefined) return [];
-    const { from, to } = fiscalYearRangeFor(yearlyFYStart);
-    const map = new Map<string, YearlyRow>();
+  // 会社全体で見て、今期のどの月まで実際に売上データが入っているか(=確定している月数)。
+  // これが無いと、前期との「同期間」比較が正しくできない(まだ数件しか入っていない月を
+  // 含めてしまうと前期側が不当に不利になる)。
+  const latestPeriodIndex = useMemo(() => {
+    if (!matCurPeriods.length) return -1;
+    const hasData = new Array(matCurPeriods.length).fill(false);
     for (const o of orders) {
-      if (branch && o.branch_code !== branch) continue;
-      if (!o.delivery_date || o.delivery_date < from || o.delivery_date > to) continue;
+      if (!o.delivery_date || !o.revenue) continue;
+      const idx = matCurPeriods.indexOf(periodKeyFor(o.delivery_date));
+      if (idx !== -1) hasData[idx] = true;
+    }
+    let last = -1;
+    hasData.forEach((v, i) => {
+      if (v) last = i;
+    });
+    return last;
+  }, [orders, matCurPeriods]);
+
+  const matRowsAll: MatRow[] = useMemo(() => {
+    if (!matCurPeriods.length) return [];
+    const map = new Map<string, { name: string; cur: MonthCell[]; prev: MonthCell[] }>();
+    for (const o of orders) {
+      if (!o.delivery_date) continue;
       const pKey = periodKeyFor(o.delivery_date);
-      let key: string;
-      let label: string;
-      if (yearlyDimension === "customer") {
-        key = o.customer_code || o.customer_name || "(得意先不明)";
-        label =
+      const curIdx = matCurPeriods.indexOf(pKey);
+      const prevIdx = matPrevPeriods.indexOf(pKey);
+      if (curIdx === -1 && prevIdx === -1) continue;
+
+      let code: string;
+      let name: string;
+      if (matDim === "branch") {
+        code = o.branch_code || "__NONE__";
+        name = branchLabel(o.branch_code);
+      } else if (matDim === "rep") {
+        code = o.rep_code || "__NONE__";
+        name = repLabel(o.rep_code);
+      } else {
+        code = o.customer_code || o.customer_name || "__NONE__";
+        name =
           o.customer_name && o.customer_code
             ? `${o.customer_name}(${o.customer_code})`
             : o.customer_name || o.customer_code || "(得意先不明)";
-      } else {
-        key = o.rep_code || "__NONE__";
-        label = repLabel(o.rep_code);
       }
-      let row = map.get(key);
-      if (!row) {
-        row = { key, label, byPeriod: {}, total: 0 };
-        map.set(key, row);
+
+      let entry = map.get(code);
+      if (!entry) {
+        entry = {
+          name,
+          cur: Array.from({ length: 12 }, () => ({ s: 0, c: 0 })),
+          prev: Array.from({ length: 12 }, () => ({ s: 0, c: 0 })),
+        };
+        map.set(code, entry);
       }
-      row.byPeriod[pKey] = (row.byPeriod[pKey] ?? 0) + o.revenue;
-      row.total += o.revenue;
+      if (curIdx !== -1) {
+        entry.cur[curIdx].s += o.revenue;
+        entry.cur[curIdx].c += o.cost;
+      }
+      if (prevIdx !== -1) {
+        entry.prev[prevIdx].s += o.revenue;
+        entry.prev[prevIdx].c += o.cost;
+      }
     }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [orders, branch, yearlyDimension, yearlyFYStart]);
+
+    const rows: MatRow[] = [];
+    for (const [code, e] of map) {
+      const cur_ts = e.cur.reduce((a, c) => a + c.s, 0);
+      const cur_tc = e.cur.reduce((a, c) => a + c.c, 0);
+      const cur_tm = cur_ts ? ((cur_ts - cur_tc) / cur_ts) * 100 : null;
+      const prev_ts = e.prev.reduce((a, c) => a + c.s, 0);
+      const prev_tc = e.prev.reduce((a, c) => a + c.c, 0);
+      const sameSlice = e.prev.slice(0, latestPeriodIndex + 1);
+      const prev_ts_same = sameSlice.reduce((a, c) => a + c.s, 0);
+      const prev_tc_same = sameSlice.reduce((a, c) => a + c.c, 0);
+      rows.push({ code, name: e.name, cur: e.cur, prev: e.prev, cur_ts, cur_tc, cur_tm, prev_ts, prev_tc, prev_ts_same, prev_tc_same });
+    }
+    return rows;
+  }, [orders, matDim, matCurPeriods, matPrevPeriods, latestPeriodIndex]);
+
+  const CUSTOMER_MATRIX_LIMIT = 100;
+  const matRows = useMemo(() => {
+    let rows = matRowsAll;
+    if (matFilter.trim()) {
+      const f = matFilter.trim().toLowerCase();
+      rows = rows.filter((r) => (r.name + r.code).toLowerCase().includes(f));
+    }
+    rows = [...rows].sort((a, b) => {
+      const v = matSortKey === "name" ? a.name.localeCompare(b.name, "ja") : a.cur_ts - b.cur_ts;
+      return v * matSortDir;
+    });
+    if (matDim === "customer" && !matFilter.trim()) {
+      rows = rows.slice(0, CUSTOMER_MATRIX_LIMIT);
+    }
+    return rows;
+  }, [matRowsAll, matFilter, matSortKey, matSortDir, matDim]);
+
+  function toggleMatSort(key: "name" | "total") {
+    if (matSortKey === key) {
+      setMatSortDir((d) => (d === 1 ? -1 : 1) as 1 | -1);
+    } else {
+      setMatSortKey(key);
+      setMatSortDir(key === "name" ? 1 : -1);
+    }
+  }
+
+  // マトリクスの行(拠点/担当/得意先)をクリックすると、下の「絞り込み・表示単位」
+  // カードにその条件をセットして、明細まで一気に絞り込める(ドリルダウン)。
+  function drillInto(row: MatRow) {
+    if (row.code !== "__NONE__") {
+      if (matDim === "branch") {
+        setBranch(row.code);
+      } else if (matDim === "rep") {
+        setRep(row.code);
+      } else {
+        setSearch(row.name);
+      }
+    }
+    setPeriodMode("fy-current");
+    filterCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   const totals = useMemo(() => {
     return filtered.reduce(
@@ -420,6 +622,122 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       </p>
 
       <div className="card" style={{ marginBottom: 20 }}>
+        <h2 style={{ marginTop: 0 }}>経営マトリクス(拠点別・担当別・得意先別、今期 vs 前期)</h2>
+        <p className="cell-sub" style={{ marginBottom: 12 }}>
+          sales-dashboardの月次売上集計は会社全体の売上・仕入としては正確ですが、在庫出荷の原価が反映されないため拠点別・担当別の利益は見られません。
+          こちらは在庫出荷分の原価も含めた実際の利益なので、個人・得意先ごとの実績を見るのに使えます。名前をクリックすると、その条件で下の明細まで絞り込めます。
+        </p>
+        <div className="filter-row">
+          <div className="filter-field" style={{ gridColumn: "span 2" }}>
+            <label>集計単位</label>
+            <div className="segmented">
+              {MAT_DIMENSIONS.map((d) => (
+                <button
+                  key={d.key}
+                  type="button"
+                  className={matDim === d.key ? "active" : ""}
+                  onClick={() => {
+                    setMatDim(d.key);
+                    setMatFilter("");
+                  }}
+                >
+                  {d.label}別
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="filter-field" style={{ gridColumn: "span 2" }}>
+            <label>表示する数値</label>
+            <div className="segmented">
+              {MAT_METRICS.map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  className={matMetric === m.key ? "active" : ""}
+                  onClick={() => setMatMetric(m.key)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        {matDim === "customer" && (
+          <div className="filter-row" style={{ marginTop: 10 }}>
+            <div className="filter-field" style={{ gridColumn: "span 2" }}>
+              <label>得意先名・コードで検索</label>
+              <input
+                type="text"
+                value={matFilter}
+                onChange={(e) => setMatFilter(e.target.value)}
+                placeholder="例: イオン、2130029365"
+                style={{ width: "100%", padding: "6px 8px", border: "1px solid var(--border)", borderRadius: 6, fontSize: 12.5 }}
+              />
+            </div>
+          </div>
+        )}
+        {currentFYStart === undefined ? (
+          <p className="empty-state">データがありません</p>
+        ) : (
+          <>
+            <div className="table-scroll table-scroll-v" style={{ marginTop: 10 }}>
+              <table style={{ minWidth: 220 + matCurPeriods.length * 78 + 170 }}>
+                <thead>
+                  <tr>
+                    <th className="sortable-th" onClick={() => toggleMatSort("name")}>
+                      {MAT_DIMENSIONS.find((d) => d.key === matDim)?.label}
+                      {matSortKey === "name" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
+                    </th>
+                    {matCurPeriods.map((p) => (
+                      <th key={p} className="num">
+                        {parseInt(p.slice(4, 6), 10)}月
+                      </th>
+                    ))}
+                    <th className="num sortable-th" onClick={() => toggleMatSort("total")}>
+                      今期計{matSortKey === "total" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {matRows.length === 0 && (
+                    <tr>
+                      <td colSpan={matCurPeriods.length + 2} className="empty-state">
+                        この条件に一致するデータはありません
+                      </td>
+                    </tr>
+                  )}
+                  {matRows.map((r) => (
+                    <tr key={r.code}>
+                      <td>
+                        <span className="clickable-cell" onClick={() => drillInto(r)}>
+                          {r.name}
+                        </span>
+                      </td>
+                      {r.cur.map((c, i) => (
+                        <td key={i} className="num">
+                          {matMonthCell(matMetric, c, r.prev[i])}
+                        </td>
+                      ))}
+                      <td className="num">{matTotalCell(matMetric, r)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="cell-sub" style={{ marginTop: 8 }}>
+              {matDim === "customer" && !matFilter.trim()
+                ? `得意先は今期売上上位${Math.min(matRowsAll.length, 100)}件(全${matRowsAll.length.toLocaleString("ja-JP")}件)を表示。検索で絞り込めます。`
+                : `${matRows.length.toLocaleString("ja-JP")}件を表示中。`}
+              {latestPeriodIndex >= 0 &&
+                ` 前期との比較は、今期データが確定している${latestPeriodIndex + 1}ヶ月分(${fiscalYearLabel(
+                  currentFYStart
+                )}のうち)で揃えています。`}
+            </p>
+          </>
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 20 }} ref={filterCardRef}>
         <h2 style={{ marginTop: 0 }}>絞り込み・表示単位</h2>
         <div className="filter-row">
           <div className="filter-field">
@@ -429,6 +747,17 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
               {branches.map((b) => (
                 <option key={b} value={b}>
                   {branchLabel(b)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="filter-field">
+            <label>担当</label>
+            <select value={rep} onChange={(e) => setRep(e.target.value)}>
+              <option value="">すべて</option>
+              {reps.map((r) => (
+                <option key={r} value={r}>
+                  {repLabel(r)}
                 </option>
               ))}
             </select>
@@ -653,99 +982,6 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
         )}
       </div>
 
-      <div className="card" style={{ marginTop: 20 }}>
-        <h2 style={{ marginTop: 0 }}>期ごとの売上一覧(得意先別・担当別、決算期1年分)</h2>
-        <p className="cell-sub" style={{ marginBottom: 12 }}>
-          sales-dashboardの月次売上集計と突き合わせるための一覧です。原価・利益は含まず、売上金額(納品日基準)のみを、
-          決算期の10月度〜翌9月度の12ヶ月で並べています。上の「拠点」絞り込みは反映されますが、期間・表示単位の絞り込みとは連動しません。
-        </p>
-        <div className="filter-row">
-          <div className="filter-field">
-            <label>集計単位</label>
-            <div className="segmented">
-              <button
-                type="button"
-                className={yearlyDimension === "customer" ? "active" : ""}
-                onClick={() => setYearlyDimension("customer")}
-              >
-                得意先別
-              </button>
-              <button
-                type="button"
-                className={yearlyDimension === "rep" ? "active" : ""}
-                onClick={() => setYearlyDimension("rep")}
-              >
-                担当別
-              </button>
-            </div>
-          </div>
-          <div className="filter-field" style={{ gridColumn: "span 2" }}>
-            <label>決算期</label>
-            <div className="segmented">
-              {currentFYStart !== undefined && (
-                <button
-                  type="button"
-                  className={yearlyFY === "current" ? "active" : ""}
-                  onClick={() => setYearlyFY("current")}
-                >
-                  今期({fiscalYearLabel(currentFYStart)})
-                </button>
-              )}
-              {previousFYStart !== undefined ? (
-                <button
-                  type="button"
-                  className={yearlyFY === "previous" ? "active" : ""}
-                  onClick={() => setYearlyFY("previous")}
-                >
-                  前期({fiscalYearLabel(previousFYStart)})
-                </button>
-              ) : (
-                <span className="cell-sub">前期データは未アップロードです</span>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="filter-actions">
-          <span className="result-count">{yearlyRows.length.toLocaleString("ja-JP")}件を表示中</span>
-        </div>
-        <div className="table-scroll table-scroll-v" style={{ marginTop: 10 }}>
-          <table style={{ minWidth: 160 + (yearlyPeriods.length + 1) * 92 }}>
-            <thead>
-              <tr>
-                <th>{yearlyDimension === "customer" ? "得意先" : "担当"}</th>
-                {yearlyPeriods.map((p) => (
-                  <th key={p} className="num">
-                    {parseInt(p.slice(4, 6), 10)}月
-                  </th>
-                ))}
-                <th className="num">合計</th>
-              </tr>
-            </thead>
-            <tbody>
-              {yearlyRows.length === 0 && (
-                <tr>
-                  <td colSpan={yearlyPeriods.length + 2} className="empty-state">
-                    この決算期のデータはまだありません
-                  </td>
-                </tr>
-              )}
-              {yearlyRows.map((r) => (
-                <tr key={r.key}>
-                  <td>{r.label}</td>
-                  {yearlyPeriods.map((p) => (
-                    <td key={p} className="num">
-                      {fmtYen(r.byPeriod[p] ?? 0)}
-                    </td>
-                  ))}
-                  <td className="num" style={{ fontWeight: 600 }}>
-                    {fmtYen(r.total)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }
