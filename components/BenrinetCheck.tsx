@@ -211,7 +211,7 @@ function parseInvoiceCsv(text: string): { records: InvoiceRecord[]; warnings: st
   return { records, warnings };
 }
 
-type Status = "amount_mismatch" | "detail_diff" | "match" | "benrinet_only" | "invoice_only";
+type Status = "amount_mismatch" | "detail_diff" | "match" | "line_offset_match" | "benrinet_only" | "invoice_only";
 
 type ReconcileRow = {
   key: string;
@@ -223,11 +223,19 @@ type ReconcileRow = {
   diff: number;
 };
 
-const STATUS_ORDER: Status[] = ["amount_mismatch", "benrinet_only", "invoice_only", "detail_diff", "match"];
+const STATUS_ORDER: Status[] = [
+  "amount_mismatch",
+  "benrinet_only",
+  "invoice_only",
+  "detail_diff",
+  "line_offset_match",
+  "match",
+];
 const STATUS_LABEL: Record<Status, string> = {
   amount_mismatch: "金額相違",
   detail_diff: "一致(内訳相違)",
   match: "一致",
+  line_offset_match: "一致(行番号ズレ)",
   benrinet_only: "べんりネットのみ",
   invoice_only: "自社請求のみ",
 };
@@ -235,6 +243,7 @@ const STATUS_BADGE_CLASS: Record<Status, string> = {
   amount_mismatch: "badge critical",
   detail_diff: "badge neutral",
   match: "badge good",
+  line_offset_match: "badge neutral",
   benrinet_only: "badge warning",
   invoice_only: "badge warning",
 };
@@ -361,6 +370,52 @@ export default function BenrinetCheck() {
       out.push({ key, customerOrderNo, lineNo, status, benrinet: b, invoice: i, diff });
     });
 
+    // 2巡目: 客先注番は同じだが行番号がズレていて片方だけ(べんりネットのみ/自社請求のみ)に
+    // 分類されてしまった行を救済する。
+    // 例: べんりネット側で本来2行目のはずの明細が(先方の都合で欠番になり)3行目として
+    // 出力され、自社側は詰めて2行目のままになっている場合など。
+    // 同じ客先注番の中で「べんりネットのみ」「自社請求のみ」がちょうど1件ずつ残っていて、
+    // 金額が一致するなら、行番号のズレによる見かけ上の不一致である可能性が高いと判断し、
+    // 「一致(行番号ズレ)」としてまとめて表示する(曖昧な組み合わせが複数あり得るときは
+    // 誤対応を避けるため何もしない)。
+    const onlyBByOrder = new Map<string, ReconcileRow[]>();
+    const onlyIByOrder = new Map<string, ReconcileRow[]>();
+    out.forEach((r) => {
+      if (r.status === "benrinet_only") {
+        const arr = onlyBByOrder.get(r.customerOrderNo);
+        if (arr) arr.push(r);
+        else onlyBByOrder.set(r.customerOrderNo, [r]);
+      } else if (r.status === "invoice_only") {
+        const arr = onlyIByOrder.get(r.customerOrderNo);
+        if (arr) arr.push(r);
+        else onlyIByOrder.set(r.customerOrderNo, [r]);
+      }
+    });
+    const toRemove = new Set<ReconcileRow>();
+    const offsetMatches: ReconcileRow[] = [];
+    onlyBByOrder.forEach((bRows, orderNo) => {
+      const iRows = onlyIByOrder.get(orderNo);
+      if (!iRows || bRows.length !== 1 || iRows.length !== 1) return;
+      const bRow = bRows[0];
+      const iRow = iRows[0];
+      if (Math.abs((bRow.benrinet?.amount ?? 0) - (iRow.invoice?.amount ?? 0)) < 1) {
+        toRemove.add(bRow);
+        toRemove.add(iRow);
+        offsetMatches.push({
+          key: `${orderNo}__offset`,
+          customerOrderNo: orderNo,
+          lineNo: `べんりネット${bRow.lineNo}/自社${iRow.lineNo}`,
+          status: "line_offset_match",
+          benrinet: bRow.benrinet,
+          invoice: iRow.invoice,
+          diff: (iRow.invoice?.amount ?? 0) - (bRow.benrinet?.amount ?? 0),
+        });
+      }
+    });
+    const merged = out.filter((r) => !toRemove.has(r)).concat(offsetMatches);
+    out.length = 0;
+    out.push(...merged);
+
     out.sort((a, b) => {
       const oa = STATUS_ORDER.indexOf(a.status);
       const ob = STATUS_ORDER.indexOf(b.status);
@@ -372,6 +427,7 @@ export default function BenrinetCheck() {
       total: out.length,
       match: out.filter((r) => r.status === "match").length,
       detailDiff: out.filter((r) => r.status === "detail_diff").length,
+      lineOffsetMatch: out.filter((r) => r.status === "line_offset_match").length,
       amountMismatch: out.filter((r) => r.status === "amount_mismatch").length,
       benrinetOnly: out.filter((r) => r.status === "benrinet_only").length,
       invoiceOnly: out.filter((r) => r.status === "invoice_only").length,
