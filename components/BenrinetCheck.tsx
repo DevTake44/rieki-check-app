@@ -267,6 +267,8 @@ export default function BenrinetCheck() {
   const [invoiceWarnings, setInvoiceWarnings] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [search, setSearch] = useState("");
+  const [dragOverBenrinet, setDragOverBenrinet] = useState(false);
+  const [dragOverInvoice, setDragOverInvoice] = useState(false);
 
   async function handleBenrinetFile(file: File) {
     setBenrinetState({ ...initialFileState(), fileName: file.name, loading: true });
@@ -423,6 +425,11 @@ export default function BenrinetCheck() {
       return a.customerOrderNo.localeCompare(b.customerOrderNo) || a.lineNo.localeCompare(b.lineNo);
     });
 
+    // 全体の金額(照合できた・できなかったに関わらず、読み込んだ全行の合計)。
+    // 「客先注番未入力」で照合対象外になった行も、実際に発生している金額なので含める。
+    const benrinetTotal = benrinetRecords.reduce((s, r) => s + r.amount, 0);
+    const invoiceTotal = invoiceRecords.reduce((s, r) => s + r.amount, 0);
+
     const summary = {
       total: out.length,
       match: out.filter((r) => r.status === "match").length,
@@ -434,6 +441,9 @@ export default function BenrinetCheck() {
       amountMismatchTotal: out
         .filter((r) => r.status === "amount_mismatch")
         .reduce((s, r) => s + r.diff, 0),
+      benrinetTotal,
+      invoiceTotal,
+      overallDiff: invoiceTotal - benrinetTotal,
     };
 
     return { rows: out, invoiceMissingKey, benrinetMissingKey, summary };
@@ -544,8 +554,25 @@ export default function BenrinetCheck() {
           marginTop: 4,
         }}
       >
-        <div className="card">
+        <div
+          className="card"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOverBenrinet(true);
+          }}
+          onDragLeave={() => setDragOverBenrinet(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOverBenrinet(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) handleBenrinetFile(f);
+          }}
+          style={dragOverBenrinet ? { outline: "2px dashed var(--direct)", outlineOffset: -2 } : undefined}
+        >
           <h2 style={{ marginTop: 0, fontSize: 16 }}>① べんりネットCSV</h2>
+          <p className="cell-sub" style={{ margin: "0 0 8px" }}>
+            ファイルをここにドラッグ&ドロップ、または下のボタンで選択してください。
+          </p>
           <input
             type="file"
             accept=".csv"
@@ -573,8 +600,25 @@ export default function BenrinetCheck() {
             </div>
           )}
         </div>
-        <div className="card">
+        <div
+          className="card"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOverInvoice(true);
+          }}
+          onDragLeave={() => setDragOverInvoice(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOverInvoice(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) handleInvoiceFile(f);
+          }}
+          style={dragOverInvoice ? { outline: "2px dashed var(--direct)", outlineOffset: -2 } : undefined}
+        >
           <h2 style={{ marginTop: 0, fontSize: 16 }}>② 自社請求データCSV</h2>
+          <p className="cell-sub" style={{ margin: "0 0 8px" }}>
+            ファイルをここにドラッグ&ドロップ、または下のボタンで選択してください。
+          </p>
           <input
             type="file"
             accept=".csv"
@@ -615,6 +659,32 @@ export default function BenrinetCheck() {
       {bothLoaded && (
         <>
           <div className="kpi-row">
+            <div className="kpi-tile">
+              <div className="label">べんりネット合計金額</div>
+              <div className="value">{fmtYen(summary.benrinetTotal)}</div>
+            </div>
+            <div className="kpi-tile">
+              <div className="label">自社請求合計金額</div>
+              <div className="value">{fmtYen(summary.invoiceTotal)}</div>
+            </div>
+            <div className="kpi-tile">
+              <div className="label">差異合計(全体・自社−べんりネット)</div>
+              <div className="value" style={{ color: Math.abs(summary.overallDiff) >= 1 ? "var(--critical)" : "var(--good)" }}>
+                {fmtYen(summary.overallDiff)}
+              </div>
+            </div>
+            <div className="kpi-tile">
+              <div className="label">うち金額相違ぶんの差額</div>
+              <div className="value" style={{ color: summary.amountMismatch > 0 ? "var(--critical)" : undefined }}>
+                {fmtYen(summary.amountMismatchTotal)}
+              </div>
+            </div>
+          </div>
+          <p className="cell-sub" style={{ margin: "6px 0 0" }}>
+            「差異合計(全体)」は2つのファイルの合計金額の差で、べんりネットのみ/自社請求のみ/客先注番未入力の行もすべて含みます。「うち金額相違ぶんの差額」は、客先注番+行番号が対応しているのに金額が違う行だけの差額です。
+          </p>
+
+          <div className="kpi-row" style={{ marginTop: 12 }}>
             <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("all")}>
               <div className="label">照合件数(合計)</div>
               <div className="value">{summary.total.toLocaleString("ja-JP")}</div>
