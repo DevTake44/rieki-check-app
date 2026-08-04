@@ -324,6 +324,9 @@ export default function InternalTransferDashboard({
           <a href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
             売上利益
           </a>
+          <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+            べんりネット照合
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>

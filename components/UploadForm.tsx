@@ -299,6 +299,13 @@ export default function UploadForm() {
         transferStatus,
         true
       )}
+      <a
+        href="/benrinet-check"
+        className="ghost-btn"
+        style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
+      >
+        べんりネット照合
+      </a>
       <a href="/" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
         ← ダッシュボードに戻る
       </a>
