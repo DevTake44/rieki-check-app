@@ -120,6 +120,17 @@ const MAT_METRICS: { key: MatMetric; label: string }[] = [
   { key: "yoy", label: "前年比" },
 ];
 
+// 「今期計」列を並び替えるときの基準値。表示中の数値(表示する数値ボタンで選んだもの)と
+// 一致させることで、クリックしたときに画面に見えている数字どおりの順番になるようにする。
+function matSortValue(metric: MatMetric, row: MatRow): number {
+  if (metric === "sales") return row.cur_ts;
+  if (metric === "cost") return row.cur_tc;
+  if (metric === "profit") return row.cur_ts - row.cur_tc;
+  if (metric === "margin") return row.cur_tm ?? -Infinity;
+  // yoy: 前期同期間との比較(%)。前期同期間の実績が無い行は最下位扱いにする。
+  return row.prev_ts_same ? row.cur_ts / row.prev_ts_same : -Infinity;
+}
+
 function fmtSigned(n: number) {
   const r = Math.round(n);
   return `${r >= 0 ? "+" : ""}${r.toLocaleString("ja-JP")}`;
@@ -427,15 +438,19 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       const f = matFilter.trim().toLowerCase();
       rows = rows.filter((r) => (r.name + r.code).toLowerCase().includes(f));
     }
+    // 得意先の上位100件への絞り込みは、表示中の数値(売上/利益/粗利率など)に関わらず
+    // 常に「今期売上が大きい順」で固定する(sales-dashboard側の mat_cust と同じ考え方)。
+    // これを表示中の並び替えと同じ基準にしてしまうと、粗利率で並び替えたときに
+    // 上位100件の顔ぶれ自体が毎回変わってしまい、何を見ているか分からなくなるため。
+    if (matDim === "customer" && !matFilter.trim()) {
+      rows = [...rows].sort((a, b) => b.cur_ts - a.cur_ts).slice(0, CUSTOMER_MATRIX_LIMIT);
+    }
     rows = [...rows].sort((a, b) => {
-      const v = matSortKey === "name" ? a.name.localeCompare(b.name, "ja") : a.cur_ts - b.cur_ts;
+      const v = matSortKey === "name" ? a.name.localeCompare(b.name, "ja") : matSortValue(matMetric, a) - matSortValue(matMetric, b);
       return v * matSortDir;
     });
-    if (matDim === "customer" && !matFilter.trim()) {
-      rows = rows.slice(0, CUSTOMER_MATRIX_LIMIT);
-    }
     return rows;
-  }, [matRowsAll, matFilter, matSortKey, matSortDir, matDim]);
+  }, [matRowsAll, matFilter, matSortKey, matSortDir, matDim, matMetric]);
 
   function toggleMatSort(key: "name" | "total") {
     if (matSortKey === key) {
@@ -694,7 +709,8 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
                       </th>
                     ))}
                     <th className="num sortable-th" onClick={() => toggleMatSort("total")}>
-                      今期計{matSortKey === "total" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
+                      今期計({MAT_METRICS.find((m) => m.key === matMetric)?.label})
+                      {matSortKey === "total" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
                     </th>
                   </tr>
                 </thead>
