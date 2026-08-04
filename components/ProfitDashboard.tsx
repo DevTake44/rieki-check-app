@@ -57,6 +57,8 @@ type GroupRow = {
   branchCode?: string | null;
   repCode?: string | null;
   projectName?: string | null;
+  unconfirmedCostLineCount?: number;
+  unconfirmedCostRevenue?: number;
 };
 
 function groupOrders(
@@ -64,7 +66,18 @@ function groupOrders(
   keyFn: (o: ProfitOrder) => string,
   labelFn: (o: ProfitOrder) => string
 ): GroupRow[] {
-  const map = new Map<string, { label: string; orderCount: number; revenue: number; cost: number; profit: number }>();
+  const map = new Map<
+    string,
+    {
+      label: string;
+      orderCount: number;
+      revenue: number;
+      cost: number;
+      profit: number;
+      unconfirmedCostLineCount: number;
+      unconfirmedCostRevenue: number;
+    }
+  >();
   for (const o of orders) {
     const key = keyFn(o);
     const existing = map.get(key);
@@ -73,8 +86,18 @@ function groupOrders(
       existing.revenue += o.revenue;
       existing.cost += o.cost;
       existing.profit += o.profit;
+      existing.unconfirmedCostLineCount += o.unconfirmed_cost_line_count ?? 0;
+      existing.unconfirmedCostRevenue += o.unconfirmed_cost_revenue ?? 0;
     } else {
-      map.set(key, { label: labelFn(o), orderCount: 1, revenue: o.revenue, cost: o.cost, profit: o.profit });
+      map.set(key, {
+        label: labelFn(o),
+        orderCount: 1,
+        revenue: o.revenue,
+        cost: o.cost,
+        profit: o.profit,
+        unconfirmedCostLineCount: o.unconfirmed_cost_line_count ?? 0,
+        unconfirmedCostRevenue: o.unconfirmed_cost_revenue ?? 0,
+      });
     }
   }
   return Array.from(map.entries()).map(([key, v]) => ({ key, ...v }));
@@ -470,7 +493,11 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       } else if (matDim === "rep") {
         setRep(row.code);
       } else {
-        setSearch(row.name);
+        // row.name は「ファンズソリューション㈱(215000266)」のような表示用の合成文字列で、
+        // 検索欄はこれをそのまま1つの文字列として含む行を探すため一致しない
+        // (受注データ側には customer_name と customer_code が別々の列で入っている)。
+        // row.code は customer_code(無ければ customer_name)そのものなので、これを使う。
+        setSearch(row.code);
       }
     }
     setPeriodMode("fy-current");
@@ -483,9 +510,11 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
         acc.revenue += o.revenue;
         acc.cost += o.cost;
         acc.profit += o.profit;
+        acc.unconfirmedCostRevenue += o.unconfirmed_cost_revenue ?? 0;
+        acc.unconfirmedCostLineCount += o.unconfirmed_cost_line_count ?? 0;
         return acc;
       },
-      { revenue: 0, cost: 0, profit: 0 }
+      { revenue: 0, cost: 0, profit: 0, unconfirmedCostRevenue: 0, unconfirmedCostLineCount: 0 }
     );
   }, [filtered]);
 
@@ -503,6 +532,8 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
         branchCode: o.branch_code,
         repCode: o.rep_code,
         projectName: o.project_name,
+        unconfirmedCostLineCount: o.unconfirmed_cost_line_count,
+        unconfirmedCostRevenue: o.unconfirmed_cost_revenue,
       }));
     }
     if (dimension === "customer") {
@@ -892,6 +923,16 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
         </div>
       </div>
 
+      {totals.unconfirmedCostLineCount > 0 && (
+        <div className="card" style={{ marginBottom: 20, padding: "12px 16px", background: "rgba(220,180,40,0.08)" }}>
+          <span className="badge warning">原価未確定</span>
+          <span style={{ marginLeft: 8 }}>
+            この絞り込みの中に、仕入・原価がまだ確定していない売上が {totals.unconfirmedCostLineCount.toLocaleString("ja-JP")}
+            件(売上額 {fmtYen(totals.unconfirmedCostRevenue)})含まれています。該当ぶんは原価不明のため、暫定的に「原価=売上(利益0円)」として上記の利益・利益率を計算しています。実際の仕入が判明すると、対象の受注・得意先・担当の利益は変わる可能性があります。一覧内の「原価未確定」マーク付き行が該当します。
+          </span>
+        </div>
+      )}
+
       <div className="card">
         <h2 style={{ marginTop: 0 }}>
           {DIMENSIONS.find((d) => d.key === dimension)?.label}別 内訳
@@ -933,7 +974,18 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
                       <span className="rf-value">{g.customerName || "—"}</span>
                       <span className="rf-value">{branchLabel(g.branchCode ?? null)}</span>
                       <span className="rf-value">{repLabel(g.repCode ?? null)}</span>
-                      <span className="rf-value">{g.label}</span>
+                      <span className="rf-value">
+                        {g.label}
+                        {!!g.unconfirmedCostLineCount && (
+                          <span
+                            className="badge warning"
+                            style={{ marginLeft: 6, padding: "0 5px", fontSize: 10 }}
+                            title={`原価未確定売上 ${fmtYen(g.unconfirmedCostRevenue ?? 0)}を含む。原価が未登録のため暫定的に利益0円として計算しています。`}
+                          >
+                            原価未確定
+                          </span>
+                        )}
+                      </span>
                     </div>
                     <div className="record-line">
                       <span className="rf-value">{g.projectName || "(通常売上)"}</span>
@@ -981,7 +1033,18 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
                   const m = marginPct(g.revenue, g.profit);
                   return (
                     <tr key={g.key}>
-                      <td>{g.label}</td>
+                      <td>
+                        {g.label}
+                        {!!g.unconfirmedCostLineCount && (
+                          <span
+                            className="badge warning"
+                            style={{ marginLeft: 6, padding: "0 5px", fontSize: 10 }}
+                            title={`原価未確定売上 ${fmtYen(g.unconfirmedCostRevenue ?? 0)}(${g.unconfirmedCostLineCount}件)を含む。原価が未登録のため暫定的に利益0円として計算しています。`}
+                          >
+                            原価未確定
+                          </span>
+                        )}
+                      </td>
                       <td className="num">{g.orderCount.toLocaleString("ja-JP")}</td>
                       <td className="num">{fmtYen(g.revenue)}</td>
                       <td className="num">{fmtYen(g.cost)}</td>

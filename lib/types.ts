@@ -51,6 +51,13 @@ export type ProfitOrder = {
   revenue: number;
   cost: number;
   profit: number;
+  // 2026-08-04追記: メーカー直送・手配で仕入未登録、かつ売上データ側の原価(assumed_cost)も
+  // ダミー値(0円/1円など)で信頼できない行の件数・売上額。このような行は原価不明のため、
+  // 利益を過大計上しないよう暫定的に「原価=売上(利益0円)」として計算している。
+  // 0件より大きい場合、その受注の利益は「原価未確定の売上ぶんは利益0円と仮定した数字」であり、
+  // 実際の仕入が判明すればこの受注の利益・利益率は変わる可能性がある。
+  unconfirmed_cost_line_count: number;
+  unconfirmed_cost_revenue: number;
 };
 
 // public.stock_transfer_pending テーブルの1行の型(社内間金額・未納品スナップショット)
