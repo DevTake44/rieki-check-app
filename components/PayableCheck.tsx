@@ -504,6 +504,9 @@ export default function PayableCheck() {
           <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ照合
           </a>
+          <a href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+            ライフ請求金額照合
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>

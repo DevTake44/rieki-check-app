@@ -320,6 +320,13 @@ export default function UploadForm() {
       >
         ライフ照合
       </a>
+      <a
+        href="/life-billing-check"
+        className="ghost-btn"
+        style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
+      >
+        ライフ請求金額照合
+      </a>
       <a href="/" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
         ← ダッシュボードに戻る
       </a>
