@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Papa from "papaparse";
 
 /**
@@ -462,25 +462,23 @@ export default function PayableCheck() {
 
   const bothLoaded = branchRecords.length > 0 && totalRecords.length > 0;
 
-  function fieldCell(r: ReconcileRow, f: FieldKey) {
-    if (!r.branch || !r.total) {
-      const v = r.branch ? r.branch[f] : r.total ? r.total[f] : null;
-      return <td className="num">{fmtYen(v)}</td>;
-    }
-    const d = r.diffs[f];
+  // 営業所合計・買掛残高の2つの値を、同じ大きさで並べて表示する(差があれば両方とも
+  // 同じ色で強調する)。片方にしか金額が無い場合(片方だけのデータ)は、無い方を「―」にする。
+  function fieldCellPair(r: ReconcileRow, f: FieldKey) {
+    const bVal = r.branch ? r.branch[f] : null;
+    const tVal = r.total ? r.total[f] : null;
+    const d = r.branch && r.total ? r.diffs[f] : 0;
     const isDiff = Math.abs(d) >= 1;
+    const color = !isDiff ? undefined : Math.abs(d) >= MINOR_DIFF_THRESHOLD ? "var(--critical)" : "var(--warning)";
     return (
-      <td className="num">
-        {fmtYen(r.total[f])}
-        {isDiff && (
-          <div
-            className="cell-sub"
-            style={{ color: Math.abs(d) >= MINOR_DIFF_THRESHOLD ? "var(--critical)" : "var(--warning)" }}
-          >
-            差{fmtYen(d)}(営業所合計{fmtYen(r.branch[f])})
-          </div>
-        )}
-      </td>
+      <>
+        <td className="num" style={{ color, fontWeight: isDiff ? 600 : undefined }}>
+          {fmtYen(bVal)}
+        </td>
+        <td className="num" style={{ color, fontWeight: isDiff ? 600 : undefined }}>
+          {fmtYen(tVal)}
+        </td>
+      </>
     );
   }
 
@@ -637,31 +635,57 @@ export default function PayableCheck() {
 
       {bothLoaded && (
         <>
-          <div className="kpi-row">
-            <div className="kpi-tile">
-              <div className="label">前月残高(買掛残高)</div>
-              <div className="value">{fmtYen(summary.totalTotal.prev)}</div>
-            </div>
-            <div className="kpi-tile">
-              <div className="label">総仕入額(買掛残高)</div>
-              <div className="value">{fmtYen(summary.totalTotal.purchase)}</div>
-            </div>
-            <div className="kpi-tile">
-              <div className="label">支払額(買掛残高)</div>
-              <div className="value">{fmtYen(summary.totalTotal.pay)}</div>
-            </div>
-            <div className="kpi-tile">
-              <div className="label">当月残高(買掛残高)</div>
-              <div className="value">{fmtYen(summary.totalTotal.cur)}</div>
-            </div>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <h2 style={{ marginTop: 0, fontSize: 16 }}>合計金額(全支払先)</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th className="num">前月残高</th>
+                  <th className="num">総仕入額</th>
+                  <th className="num">支払額</th>
+                  <th className="num">当月残高</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ fontWeight: 600 }}>① 営業所別合計</td>
+                  <td className="num">{fmtYen(summary.branchTotal.prev)}</td>
+                  <td className="num">{fmtYen(summary.branchTotal.purchase)}</td>
+                  <td className="num">{fmtYen(summary.branchTotal.pay)}</td>
+                  <td className="num">{fmtYen(summary.branchTotal.cur)}</td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 600 }}>② 買掛残高(全社)</td>
+                  <td className="num">{fmtYen(summary.totalTotal.prev)}</td>
+                  <td className="num">{fmtYen(summary.totalTotal.purchase)}</td>
+                  <td className="num">{fmtYen(summary.totalTotal.pay)}</td>
+                  <td className="num">{fmtYen(summary.totalTotal.cur)}</td>
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 600 }}>差額(①−②)</td>
+                  {FIELD_KEYS.map((f) => {
+                    const d = summary.branchTotal[f] - summary.totalTotal[f];
+                    const isDiff = Math.abs(d) >= 1;
+                    return (
+                      <td
+                        key={f}
+                        className="num"
+                        style={{
+                          color: !isDiff ? "var(--good)" : Math.abs(d) >= MINOR_DIFF_THRESHOLD ? "var(--critical)" : "var(--warning)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {fmtYen(d)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <p className="cell-sub" style={{ margin: "6px 0 0" }}>
-            営業所別買掛残高の合計: 前月残高{fmtYen(summary.branchTotal.prev)} / 総仕入額
-            {fmtYen(summary.branchTotal.purchase)} / 支払額{fmtYen(summary.branchTotal.pay)} / 当月残高
-            {fmtYen(summary.branchTotal.cur)}
-          </p>
 
-          <div className="kpi-row" style={{ marginTop: 12 }}>
+          <div className="kpi-row">
             <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("all")}>
               <div className="label">支払先数(合計)</div>
               <div className="value">{summary.total.toLocaleString("ja-JP")}</div>
@@ -727,19 +751,34 @@ export default function PayableCheck() {
               <table>
                 <thead>
                   <tr>
-                    <th>結果</th>
-                    <th>支払先コード/名</th>
-                    <th className="num">営業所数</th>
-                    <th className="num">前月残高</th>
-                    <th className="num">総仕入額</th>
-                    <th className="num">支払額</th>
-                    <th className="num">当月残高</th>
+                    <th rowSpan={2}>結果</th>
+                    <th rowSpan={2}>支払先コード/名</th>
+                    <th rowSpan={2} className="num">
+                      営業所数
+                    </th>
+                    {FIELD_KEYS.map((f) => (
+                      <th key={f} className="num" colSpan={2}>
+                        {FIELD_LABEL[f]}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    {FIELD_KEYS.map((f) => (
+                      <Fragment key={f}>
+                        <th className="num cell-sub" style={{ fontWeight: 600 }}>
+                          営業所合計
+                        </th>
+                        <th className="num cell-sub" style={{ fontWeight: 600 }}>
+                          買掛残高
+                        </th>
+                      </Fragment>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="empty-state">
+                      <td colSpan={11} className="empty-state">
                         この条件に一致するデータはありません
                       </td>
                     </tr>
@@ -753,10 +792,10 @@ export default function PayableCheck() {
                         {r.code} {r.name}
                       </td>
                       <td className="num">{r.branch?.branchCount ?? "―"}</td>
-                      {fieldCell(r, "prev")}
-                      {fieldCell(r, "purchase")}
-                      {fieldCell(r, "pay")}
-                      {fieldCell(r, "cur")}
+                      {fieldCellPair(r, "prev")}
+                      {fieldCellPair(r, "purchase")}
+                      {fieldCellPair(r, "pay")}
+                      {fieldCellPair(r, "cur")}
                     </tr>
                   ))}
                 </tbody>
