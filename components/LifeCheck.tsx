@@ -61,12 +61,18 @@ type TaikoOrder = {
   orderNo: string;
   customerOrderNo: string;
   customerContact: string;
+  customerCode: string;
   deliveryName: string;
   deliveryDate: string;
   subject: string;
   rep: string;
   items: TaikoItem[];
 };
+
+// ライフコーポレーションの得意先コード(参考: べんりネットは 210302999)。
+// 太幸受注出力CSVの「得意先コード」列がこれと異なる行が混ざっていたら、
+// ライフ以外のデータを取り込んでいる可能性が高いため警告を出す。
+const LIFE_CUSTOMER_CODE = "210970188";
 
 type FileState = {
   fileName: string;
@@ -233,6 +239,7 @@ function parseTaikoCsv(text: string): { orders: TaikoOrder[]; warnings: string[]
         orderNo,
         customerOrderNo: (r["客先注番"] || "").trim(),
         customerContact: (r["客先担当"] || "").trim(),
+        customerCode: (r["得意先コード"] || "").trim(),
         deliveryName: (r["納入先名１"] || "").trim(),
         deliveryDate: (r["納品年月日"] || "").trim(),
         subject: (r["件名"] || "").trim(),
@@ -255,6 +262,24 @@ function parseTaikoCsv(text: string): { orders: TaikoOrder[]; warnings: string[]
   const warnings: string[] = [];
   const orders = Array.from(orderMap.values());
   if (orders.length === 0) warnings.push("読み込める形式のデータ行が1件もありませんでした。");
+
+  // ライフ以外の得意先コードが混ざっていないか確認(誤って別の得意先向けCSVを
+  // アップロードした場合に気づけるようにするため)。
+  const otherCodes = new Map<string, number>();
+  orders.forEach((o) => {
+    if (o.customerCode && o.customerCode !== LIFE_CUSTOMER_CODE) {
+      otherCodes.set(o.customerCode, (otherCodes.get(o.customerCode) || 0) + 1);
+    }
+  });
+  if (otherCodes.size > 0) {
+    const detail = Array.from(otherCodes.entries())
+      .map(([code, n]) => `${code}(${n}件)`)
+      .join("、");
+    warnings.push(
+      `ライフの得意先コード(${LIFE_CUSTOMER_CODE})以外のデータが含まれています: ${detail}。ライフ向けの受注出力CSVで間違いないか確認してください。`
+    );
+  }
+
   return { orders, warnings };
 }
 
@@ -693,12 +718,16 @@ export default function LifeCheck() {
                               {c.matchType === "exact_key" ? "客先注番一致" : "日付・店舗一致"}
                             </span>
                             {(() => {
-                              const status = c.bestItem?.transactionType || c.order.items[0]?.transactionType || "";
-                              if (status === "売上") return <span className="badge good">売上済</span>;
-                              if (!status) return <span className="badge warning">未処理</span>;
-                              return <span className="badge neutral">{status}</span>;
+                              // 取引区分名は「売上」区分の受注であることを示すだけで、実際に
+                              // 納品(出荷)済みかどうかは納品書番号・納品数量が入っているかで判断する。
+                              // ここが0/空欄のまま「売上済」表示になっていたのは誤りだったため修正。
+                              if (!c.bestItem) return <span className="badge neutral">品目未確認</span>;
+                              const delivered = !!c.bestItem.deliverySlipNo && c.bestItem.deliverySlipNo !== "0" && c.bestItem.deliveryQty !== 0;
+                              if (delivered) return <span className="badge good">売上済</span>;
+                              return <span className="badge warning">未売上(今回処理対象)</span>;
                             })()}
                             <strong style={{ marginLeft: 8 }}>受注番号 {c.order.orderNo}</strong>
+                            {c.order.customerCode && <span className="cell-sub"> ／ 得意先{c.order.customerCode}</span>}
                             {c.order.customerContact && <span className="cell-sub"> ／ {c.order.customerContact}</span>}
                             {c.order.subject && <span className="cell-sub"> ／ {c.order.subject}</span>}
                           </div>
@@ -736,7 +765,24 @@ export default function LifeCheck() {
                               >
                                 数量 {c.bestItem.qty}
                               </div>
-                              <div className="cell-sub" style={{ marginTop: 2 }}>
+                              <div
+                                className={
+                                  c.bestItem.deliverySlipNo && c.bestItem.deliverySlipNo !== "0" && c.bestItem.deliveryQty !== 0
+                                    ? "cell-sub"
+                                    : undefined
+                                }
+                                style={{
+                                  marginTop: 2,
+                                  color:
+                                    c.bestItem.deliverySlipNo && c.bestItem.deliverySlipNo !== "0" && c.bestItem.deliveryQty !== 0
+                                      ? undefined
+                                      : "var(--warning)",
+                                  fontWeight:
+                                    c.bestItem.deliverySlipNo && c.bestItem.deliverySlipNo !== "0" && c.bestItem.deliveryQty !== 0
+                                      ? undefined
+                                      : 600,
+                                }}
+                              >
                                 納品書番号 {c.bestItem.deliverySlipNo || "―"} ／ 納品数量 {c.bestItem.deliveryQty}
                               </div>
                             </div>
