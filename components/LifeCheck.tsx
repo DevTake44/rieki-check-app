@@ -52,6 +52,9 @@ type TaikoItem = {
   qty: number;
   price: number;
   amount: number;
+  deliverySlipNo: string;
+  deliveryQty: number;
+  transactionType: string;
 };
 
 type TaikoOrder = {
@@ -243,6 +246,9 @@ function parseTaikoCsv(text: string): { orders: TaikoOrder[]; warnings: string[]
       qty: toNum(r["受注総数量"]),
       price: toNum(r["販売単価"]),
       amount: toNum(r["金額"]),
+      deliverySlipNo: (r["納品書番号"] || "").trim(),
+      deliveryQty: toNum(r["納品総数量"]),
+      transactionType: (r["取引区分名"] || "").trim(),
     });
   });
 
@@ -686,6 +692,12 @@ export default function LifeCheck() {
                             <span className={c.matchType === "exact_key" ? "badge good" : "badge neutral"}>
                               {c.matchType === "exact_key" ? "客先注番一致" : "日付・店舗一致"}
                             </span>
+                            {(() => {
+                              const status = c.bestItem?.transactionType || c.order.items[0]?.transactionType || "";
+                              if (status === "売上") return <span className="badge good">売上済</span>;
+                              if (!status) return <span className="badge warning">未処理</span>;
+                              return <span className="badge neutral">{status}</span>;
+                            })()}
                             <strong style={{ marginLeft: 8 }}>受注番号 {c.order.orderNo}</strong>
                             {c.order.customerContact && <span className="cell-sub"> ／ {c.order.customerContact}</span>}
                             {c.order.subject && <span className="cell-sub"> ／ {c.order.subject}</span>}
@@ -724,6 +736,9 @@ export default function LifeCheck() {
                               >
                                 数量 {c.bestItem.qty}
                               </div>
+                              <div className="cell-sub" style={{ marginTop: 2 }}>
+                                納品書番号 {c.bestItem.deliverySlipNo || "―"} ／ 納品数量 {c.bestItem.deliveryQty}
+                              </div>
                             </div>
                           </div>
                         )}
@@ -737,12 +752,17 @@ export default function LifeCheck() {
                             <summary className="cell-sub" style={{ cursor: "pointer" }}>
                               この受注の他の品目({c.otherItems.length}件)
                             </summary>
-                            <table style={{ marginTop: 6 }}>
+                            <table style={{ marginTop: 6, width: "100%", tableLayout: "fixed" }}>
                               <tbody>
                                 {c.otherItems.map((it, i) => (
                                   <tr key={i}>
-                                    <td>{it.itemName}</td>
-                                    <td className="num">数量 {it.qty}</td>
+                                    <td style={{ wordBreak: "break-all" }}>{it.itemName}</td>
+                                    <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                      数量 {it.qty}
+                                    </td>
+                                    <td className="cell-sub" style={{ whiteSpace: "nowrap" }}>
+                                      納品書{it.deliverySlipNo || "―"}
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
