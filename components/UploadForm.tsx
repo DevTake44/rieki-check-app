@@ -327,8 +327,8 @@ export default function UploadForm() {
       >
         ライフ請求金額照合
       </a>
-      <a href="/" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
-        ← ダッシュボードに戻る
+      <a href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
+        ← メニューに戻る
       </a>
     </div>
   );

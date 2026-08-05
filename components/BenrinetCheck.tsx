@@ -553,8 +553,8 @@ export default function BenrinetCheck() {
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>
-          <a href="/" className="ghost-btn" style={{ textDecoration: "none" }}>
-            ← 値上げ検知ダッシュボードへ
+          <a href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+            ← メニューに戻る
           </a>
         </div>
       </div>
