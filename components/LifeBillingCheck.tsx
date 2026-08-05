@@ -456,6 +456,16 @@ export default function LifeBillingCheck() {
     return c;
   }, [results]);
 
+  // 送料・運賃は個々の受注に自動で紐づけられないため、明細を並べて目視で確認できるようにする。
+  const lifeFreightLines = useMemo(
+    () => targetLifeLines.filter((l) => l.isFreight).sort((a, b) => (a.slipNo < b.slipNo ? -1 : 1)),
+    [targetLifeLines]
+  );
+  const taikoFreightLines = useMemo(
+    () => taikoLines.filter((t) => t.isFreight).sort((a, b) => (a.orderNo < b.orderNo ? -1 : 1)),
+    [taikoLines]
+  );
+
   const filteredResults = useMemo(() => {
     let r = results;
     if (statusFilter !== "all") r = r.filter((x) => x.status === statusFilter);
@@ -722,6 +732,112 @@ export default function LifeBillingCheck() {
               ②太幸は、アップロードしたファイルに含まれる全行の合計です。対象月とスコープが一致するファイルをアップロードしてください(期間がずれていると①と②は一致しません)。
             </p>
           </div>
+
+          <details className="card" style={{ marginBottom: 20 }} open>
+            <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+              送料・運賃の明細を見る(自動突合はできないため、並べて目視確認できるようにしています)
+            </summary>
+            <p className="cell-sub" style={{ marginTop: 8 }}>
+              ライフの「送料」行は商品コード・他伝票Noが空欄で、太幸のどの受注の運賃かを機械的に特定できません。下に両側の明細を並べているので、件数や金額の並びを見比べて確認してください。
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                gap: 16,
+                marginTop: 10,
+              }}
+            >
+              <div>
+                <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>
+                  ①ライフ 送料明細({targetMonth}・{lifeFreightLines.length}件)
+                </h3>
+                <div className="table-scroll-v" style={{ maxHeight: 320 }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>伝票No</th>
+                        <th>計上日</th>
+                        <th>店名</th>
+                        <th className="num">金額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lifeFreightLines.map((l, i) => (
+                        <tr key={i}>
+                          <td>{l.slipNo}</td>
+                          <td>{l.postingDate}</td>
+                          <td>{l.storeName}</td>
+                          <td className="num">{fmtYen(l.amount)}</td>
+                        </tr>
+                      ))}
+                      {lifeFreightLines.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="cell-sub">
+                            対象月の送料行はありません
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={3} style={{ fontWeight: 700 }}>
+                          合計
+                        </td>
+                        <td className="num" style={{ fontWeight: 700 }}>
+                          {fmtYen(summary.lifeFreightTotal)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>
+                  ②太幸 運賃明細(アップロードファイル全体・{taikoFreightLines.length}件)
+                </h3>
+                <div className="table-scroll-v" style={{ maxHeight: 320 }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>受注番号</th>
+                        <th>客先注番</th>
+                        <th>納品日</th>
+                        <th className="num">金額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {taikoFreightLines.map((t, i) => (
+                        <tr key={i}>
+                          <td>{t.orderNo}</td>
+                          <td>{t.customerOrderNo || "(なし)"}</td>
+                          <td>{t.deliveryDate}</td>
+                          <td className="num">{fmtYen(t.amount)}</td>
+                        </tr>
+                      ))}
+                      {taikoFreightLines.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="cell-sub">
+                            運賃行はありません
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={3} style={{ fontWeight: 700 }}>
+                          合計
+                        </td>
+                        <td className="num" style={{ fontWeight: 700 }}>
+                          {fmtYen(summary.taikoFreightTotal)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </details>
 
           <div className="kpi-row">
             <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("all")}>
