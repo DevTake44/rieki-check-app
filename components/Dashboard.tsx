@@ -259,6 +259,9 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
           <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             べんりネット照合
           </a>
+          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+            買掛月報照合
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>

@@ -306,6 +306,13 @@ export default function UploadForm() {
       >
         べんりネット照合
       </a>
+      <a
+        href="/payable-check"
+        className="ghost-btn"
+        style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
+      >
+        買掛月報照合
+      </a>
       <a href="/" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
         ← ダッシュボードに戻る
       </a>

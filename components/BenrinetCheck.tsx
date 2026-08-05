@@ -536,6 +536,9 @@ export default function BenrinetCheck() {
           <a href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
             社内間金額
           </a>
+          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+            買掛月報照合
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>
