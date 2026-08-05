@@ -80,6 +80,11 @@ type FileState = {
   error: string | null;
 };
 
+// べんりネットの得意先コード(参考: ライフコーポレーションは 210970188)。
+// 基幹システムから自社請求データをダウンロードする際に得意先コードを
+// 調べ直さなくて済むよう、アップロード画面に表示しておく。
+const BENRINET_CUSTOMER_CODE = "210302999";
+
 function initialFileState(): FileState {
   return { fileName: "", encoding: "", loading: false, error: null };
 }
@@ -622,6 +627,9 @@ export default function BenrinetCheck() {
           style={dragOverInvoice ? { outline: "2px dashed var(--direct)", outlineOffset: -2 } : undefined}
         >
           <h2 style={{ marginTop: 0, fontSize: 16 }}>② 自社請求データCSV</h2>
+          <p style={{ margin: "0 0 8px", fontSize: 13 }}>
+            基幹システムからダウンロードする際の得意先コード: <strong>{BENRINET_CUSTOMER_CODE}</strong>(べんりネット)
+          </p>
           <p className="cell-sub" style={{ margin: "0 0 8px" }}>
             ファイルをここにドラッグ&ドロップ、または下のボタンで選択してください。
           </p>

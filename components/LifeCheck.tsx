@@ -574,6 +574,9 @@ export default function LifeCheck() {
           style={dragOverTaiko ? { outline: "2px dashed var(--direct)", outlineOffset: -2 } : undefined}
         >
           <h2 style={{ marginTop: 0, fontSize: 16 }}>② 太幸受注出力CSV(ライフ分)</h2>
+          <p style={{ margin: "0 0 8px", fontSize: 13 }}>
+            基幹システムからダウンロードする際の得意先コード: <strong>{LIFE_CUSTOMER_CODE}</strong>(ライフ)
+          </p>
           <p className="cell-sub" style={{ margin: "0 0 8px" }}>
             ファイルをここにドラッグ&ドロップ、または下のボタンで選択してください。
           </p>
