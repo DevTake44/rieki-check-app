@@ -10,6 +10,11 @@ export const dynamic = "force-dynamic";
 // v_price_increase_alerts は14,000件超あるため、.range()で1000件ずつ全件
 // 取得するまでページングする(2026-07-31判明: これが原因で拠点21より後の
 // データがダッシュボードに一切届いておらず、拠点セレクタにも出ていなかった)。
+//
+// 重要(2026-08-05判明): .range()によるページングは.order()で安定した並び順を
+// 指定しないと正しく機能しない(ORDER BY が無いとPostgreSQLが返す行の順序は
+// クエリのたびに変わり得るため、ページをまたいで行が重複・欠落する)。
+// sales_line_id にユニークインデックスがあるので、これで明示的に昇順ソートする。
 const PAGE_SIZE = 1000;
 
 async function fetchAllAlerts(
@@ -21,6 +26,7 @@ async function fetchAllAlerts(
     const { data, error } = await supabase
       .from("v_price_increase_alerts")
       .select("*")
+      .order("sales_line_id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 
     if (error) return { rows, error };

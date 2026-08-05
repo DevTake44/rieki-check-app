@@ -15,6 +15,13 @@ export const dynamic = "force-dynamic";
 // これは、以前 v_profit_by_order がマテリアライズドビュー化される前、全ページ並列取得が
 // Supabase側の同時実行数・statement_timeoutを超えてタイムアウトを引き起こした
 // (canceling statement due to statement timeout)実例があったための保険。
+//
+// 重要(2026-08-05判明): .range()によるページングは.order()で安定した並び順を
+// 指定しないと正しく機能しない(ORDER BY が無いとPostgreSQLが返す行の順序は
+// クエリのたびに変わり得るため、ページをまたいで行が重複・欠落する)。特にこの
+// 関数のように複数ページを並列(Promise.all)で取得する場合、順序が不安定だと
+// 影響がさらに出やすい。order_no にユニークインデックスがあるので、これで
+// 明示的に昇順ソートする。
 const PAGE_SIZE = 1000;
 const CONCURRENCY = 8;
 
@@ -40,6 +47,7 @@ async function fetchAllProfitOrders(
         supabase
           .from("v_profit_by_order")
           .select("*")
+          .order("order_no", { ascending: true })
           .range(from, from + PAGE_SIZE - 1)
       )
     );
