@@ -863,6 +863,51 @@ export default function LifeBillingCheck() {
             )}
           </div>
 
+          <div className="card" style={{ marginBottom: 20, borderColor: freightMatchResult.unusedLife.length > 0 ? "var(--warning)" : undefined }}>
+            <h2 style={{ marginTop: 0 }}>ライフにあるが太幸の受注と対応しない送料(誤登録の可能性・要確認)</h2>
+            <p className="cell-sub" style={{ marginTop: -6, marginBottom: 10 }}>
+              逆に、ライフの送料行のうち、対象月の太幸の運賃のどれとも対応が取れなかったものです。太幸側に存在しない金額で計上されている、同じ内容が二重に計上されている、といった誤登録の可能性があります。上の「追加が必要な受注」と店舗・品目を見比べて、金額の打ち間違いなどがないか確認してください。
+            </p>
+            {freightMatchResult.unusedLife.length === 0 ? (
+              <div className="empty-state">対応が取れないライフの送料行はありません</div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>伝票No</th>
+                    <th>店名</th>
+                    <th>概要(品目)</th>
+                    <th>計上日</th>
+                    <th className="num">金額</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {freightMatchResult.unusedLife.map((l, i) => (
+                    <tr key={i}>
+                      <td>{l.slipNo}</td>
+                      <td>{l.storeName}</td>
+                      <td>{l.freightItemDesc || "(不明)"}</td>
+                      <td>{l.postingDate}</td>
+                      <td className="num" style={{ fontWeight: 700, color: "var(--warning)" }}>
+                        {fmtYen(l.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} style={{ fontWeight: 700 }}>
+                      合計
+                    </td>
+                    <td className="num" style={{ fontWeight: 700, color: "var(--warning)" }}>
+                      {fmtYen(freightMatchResult.unusedLife.reduce((s, l) => s + l.amount, 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            )}
+          </div>
+
           <details className="card" style={{ marginBottom: 20 }}>
             <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
               送料・運賃の明細を全件見る(店舗・概要をもとに自動で突き合わせていますが、完全ではないため元データも確認できるようにしています)
