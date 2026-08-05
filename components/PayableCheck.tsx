@@ -501,6 +501,9 @@ export default function PayableCheck() {
           <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             べんりネット照合
           </a>
+          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+            ライフ照合
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>

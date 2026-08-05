@@ -656,6 +656,9 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
           <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             買掛月報照合
           </a>
+          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+            ライフ照合
+          </a>
           <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
           </a>

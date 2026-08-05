@@ -313,6 +313,13 @@ export default function UploadForm() {
       >
         買掛月報照合
       </a>
+      <a
+        href="/life-check"
+        className="ghost-btn"
+        style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
+      >
+        ライフ照合
+      </a>
       <a href="/" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
         ← ダッシュボードに戻る
       </a>
