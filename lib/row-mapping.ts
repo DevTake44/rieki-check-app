@@ -214,10 +214,21 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
 }
 
 // 受注出力CSVの行を、社内間(未納品の拠点間移動)候補としてフィルタする。
-// 条件(2026-07-31にユーザーと確認済み): 手配区分=在庫 かつ 納入先名1に「太幸」を
-// 含む(＝納入先が実在の外部得意先ではなく自社拠点/倉庫)行だけを対象とする。
-// この関数を通過する行は少数(実データで1777行中60行程度)になる想定で、
+// 条件(2026-07-31にユーザーと確認済み、2026-08-05に拠点90/91向けの条件を追加):
+// 手配区分=在庫の行のうち、
+//   ・営業所コード(拠点)が90(鳴尾在庫)または91(土浦物流)の場合は、納入先名1の
+//     文字列に関わらず全件を対象とする。手配区分=在庫の時点で出荷元は社内(自社倉庫)
+//     であることが保証されており、メーカー直送・手配(＝仕入先からの直送)は
+//     このarrange_typeチェックで既に除外されているため、90/91向けは無条件で拾ってよい。
+//     (2026-08-05判明: 拠点91宛の行は納入先名1が「土浦物流センター　在庫」のように
+//     「太幸」を含まない表記になっており、以前の条件では漏れていた。実データで
+//     12行・2,032,150円が未取り込みだったことを確認して修正。)
+//   ・それ以外の拠点の場合は、従来通り納入先名1に「太幸」を含む(＝納入先が実在の
+//     外部得意先ではなく自社拠点/倉庫)行だけを対象とする。
+// この関数を通過する行は少数(実データで1777行中60〜70件程度)になる想定で、
 // stock_transfer_pending テーブルはアップロードのたびに全件洗い替えする。
+const INTERNAL_WAREHOUSE_BRANCH_CODES = new Set(["90", "91"]);
+
 export function mapTransferRow(cols: string[]): TransferRowInsert | null {
   if (isBlankRow(cols)) return null;
   if (cols.length < MIN_SALES_COLS) return null;
@@ -225,14 +236,19 @@ export function mapTransferRow(cols: string[]): TransferRowInsert | null {
   const arrange_type = textOrNull(cols, 49);
   if (arrange_type !== "在庫") return null;
 
+  const branch_code = textOrNull(cols, 23);
   const delivery_dest_name = textOrNull(cols, 7);
-  if (!delivery_dest_name || !delivery_dest_name.includes("太幸")) return null;
+
+  const isInternalWarehouseBranch = branch_code !== null && INTERNAL_WAREHOUSE_BRANCH_CODES.has(branch_code);
+  if (!isInternalWarehouseBranch) {
+    if (!delivery_dest_name || !delivery_dest_name.includes("太幸")) return null;
+  }
 
   return {
     order_no: textOrNull(cols, 11),
     order_line: textOrNull(cols, 12),
     order_date: dateOrNull(cols, 21),
-    branch_code: textOrNull(cols, 23),
+    branch_code,
     shipping_code: textOrNull(cols, 42),
     shipping_name: textOrNull(cols, 43),
     delivery_dest_name,

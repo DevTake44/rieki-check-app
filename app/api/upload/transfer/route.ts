@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   }
   if (rows.length > MAX_ROWS) {
     return NextResponse.json(
-      { error: `対象行数が想定より多すぎます(${rows.length}件 > 上限${MAX_ROWS}件)。抽出条件(手配区分=在庫かつ納入先名1に「太幸」を含む)が正しく効いているか確認してください。` },
+      { error: `対象行数が想定より多すぎます(${rows.length}件 > 上限${MAX_ROWS}件)。抽出条件(手配区分=在庫のうち、拠点90/91宛または納入先名1に「太幸」を含む行)が正しく効いているか確認してください。` },
       { status: 400 }
     );
   }

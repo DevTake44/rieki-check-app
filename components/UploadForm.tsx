@@ -130,8 +130,9 @@ export default function UploadForm() {
       .filter((r): r is SalesRowInsert | PurchaseRowInsert | TransferRowInsert => r !== null);
 
     // transfer(社内間・未納品の拠点間移動)は、対象外の行が最初から捨てられる設計
-    // (手配区分=在庫かつ納入先名1に「太幸」を含む行だけが残る)なので、
-    // 0件でも異常ではない(該当する移動が無かった、というだけ)。エラー扱いにしない。
+    // (手配区分=在庫の行のうち、拠点90/91宛は無条件、それ以外は納入先名1に「太幸」を
+    // 含む行だけが残る)なので、0件でも異常ではない(該当する移動が無かった、というだけ)。
+    // エラー扱いにしない。
     if (mapped.length === 0 && kind !== "transfer") {
       setStatus((s) => ({
         ...s,
@@ -236,7 +237,7 @@ export default function UploadForm() {
             {(status.totalRows > 0 || (replaceMode && status.finished)) && (
               <div>
                 {replaceMode
-                  ? `対象行(手配区分=在庫かつ納入先名1に「太幸」を含む): ${status.totalRows.toLocaleString("ja-JP")}件`
+                  ? `対象行(手配区分=在庫のうち、拠点90/91宛または納入先名1に「太幸」を含む行): ${status.totalRows.toLocaleString("ja-JP")}件`
                   : `読み込んだ行数: ${status.totalRows.toLocaleString("ja-JP")}件 ／ 送信済み: ${status.sentRows.toLocaleString("ja-JP")}件 ／ バッチ ${status.doneBatches}/${status.totalBatches}`}
               </div>
             )}
