@@ -11,18 +11,21 @@ import Papa from "papaparse";
  * 金額を突き合わせる。月末締めのため、計上日が月をまたぐ場合は対象月を選べるようにする。
  * データはどこにも保存しない(その場限りの照合)。
  *
- * ■ 商品行と送料・運賃行を分けて集計する理由
- * ライフの「送料」行は商品コード・他伝票Noが空欄で、どの受注に対応するか特定できない
- * (実データで確認済み)。一方、太幸側の運賃行(品番"99")は同じ受注の客先注番を引き継いでいる。
- * そのため、商品行は下記の「他伝票No ⇔ 客先注番」で個別に突き合わせ、送料・運賃は
- * 月合計同士の比較にとどめる(個別の受注への割り当ては行わない)。
- *
  * ■ 商品行の突き合わせ方
  * 1. 他伝票No(ライフ) = 客先注番(太幸)の完全一致キーで対応する太幸の行(複数あれば合算)を探す。
  *    同じ他伝票Noを持つライフ行が複数ある場合も合算してから比較する(実データで、1受注に
  *    2商品が含まれ、ライフ側では2行に分かれるケースを確認したため)。
  * 2. 見つからない場合は、納品日+店舗名で候補の太幸受注を探すフォールバックを行う
  *    (ライフ照合と同じロジック)。ただし金額の自動判定はできないため「要確認」として提示する。
+ *
+ * ■ 送料・運賃の突き合わせ方(太幸が追加で送料を計上している分の見つけ方)
+ * ライフの「送料」行自体には商品コード・他伝票Noが空欄で入っておらず、太幸の運賃行(品番"99")の
+ * ような明確なキーでは突き合わせられない。ただし実データを調べたところ、ライフの送料行には
+ * 「概要」列に対象商品名が入っている(直前行の送料の場合は「上記送料」等と省略され、直前の
+ * 商品行の概要を参照する形になっている)ことが分かった。そこで、店舗(店コード/店名 ⇔ 納入先名１)
+ * ＋概要と品名の類似度で、太幸の運賃行1件ごとにライフの送料行を1件ずつ突き合わせる
+ * (総当たりで最も類似度が高い組み合わせから確定していく)。一致しなかった太幸側の運賃は、
+ * まだライフのシステムに送料が追加されていない受注の候補として一覧表示する。
  */
 
 type LifeLine = {
@@ -39,6 +42,8 @@ type LifeLine = {
   amount: number;
   otherSlipNo: string;
   isFreight: boolean;
+  // 送料行のみ使用。「概要」列を解決した実質的な対象商品名(直前行参照の解決込み)。
+  freightItemDesc: string;
 };
 
 type TaikoLine = {
@@ -190,12 +195,24 @@ function parseLifeCsv(text: string): { records: LifeLine[]; warnings: string[] }
     };
   }
   const objs = rowsToObjects(rows, headerIdx).filter((r) => (r["品名"] || "").trim() !== "");
+  // 送料行の「概要」は、直前の商品行を指す省略表記(「上記送料」等)や空欄のことがあるため、
+  // 伝票内で直前に出てきた商品行の概要(なければ品名)を引き継いで解決する。
+  const lastDescBySlip = new Map<string, string>();
   const records: LifeLine[] = objs.map((r) => {
     const itemName = (r["品名"] || "").trim();
     const postingDate = (r["計上日"] || "").trim();
+    const slipNo = (r["伝票Ｎｏ"] || "").trim();
+    const isFreight = itemName === "送料";
+    const desc = (r["概要"] || "").trim();
+    let freightItemDesc = "";
+    if (isFreight) {
+      freightItemDesc = desc && !desc.includes("上記") && desc !== "送料" ? desc : lastDescBySlip.get(slipNo) || "";
+    } else {
+      lastDescBySlip.set(slipNo, desc || itemName);
+    }
     return {
-      key: `${(r["伝票Ｎｏ"] || "").trim()}__${(r["行番号"] || "").trim()}`,
-      slipNo: (r["伝票Ｎｏ"] || "").trim(),
+      key: `${slipNo}__${(r["行番号"] || "").trim()}`,
+      slipNo,
       lineNo: (r["行番号"] || "").trim(),
       postingDate,
       postingMonth: monthOf(postingDate),
@@ -206,7 +223,8 @@ function parseLifeCsv(text: string): { records: LifeLine[]; warnings: string[] }
       price: toNum(r["単価"]),
       amount: toNum(r["金額"]),
       otherSlipNo: (r["他伝票No"] || "").trim(),
-      isFreight: itemName === "送料",
+      isFreight,
+      freightItemDesc,
     };
   });
   const warnings: string[] = [];
@@ -456,7 +474,6 @@ export default function LifeBillingCheck() {
     return c;
   }, [results]);
 
-  // 送料・運賃は個々の受注に自動で紐づけられないため、明細を並べて目視で確認できるようにする。
   const lifeFreightLines = useMemo(
     () => targetLifeLines.filter((l) => l.isFreight).sort((a, b) => (a.slipNo < b.slipNo ? -1 : 1)),
     [targetLifeLines]
@@ -465,6 +482,74 @@ export default function LifeBillingCheck() {
     () => taikoLines.filter((t) => t.isFreight).sort((a, b) => (a.orderNo < b.orderNo ? -1 : 1)),
     [taikoLines]
   );
+
+  // 太幸の運賃(受注単位)を、店舗+品目の類似度でライフの送料行と1件ずつ突き合わせる。
+  // 一致しなかった太幸側の運賃が「まだライフのシステムに送料が追加されていない受注」の候補。
+  type FreightMatch = { taikoOrderNo: string; con: string; deliveryName: string; itemNames: string[]; amount: number; score: number };
+  const freightMatchResult = useMemo(() => {
+    const ordersMap = new Map<string, TaikoLine[]>();
+    taikoLines.forEach((t) => {
+      const arr = ordersMap.get(t.orderNo) || [];
+      arr.push(t);
+      ordersMap.set(t.orderNo, arr);
+    });
+    const taikoFreightOrders: { orderNo: string; con: string; deliveryName: string; itemNames: string[]; amount: number }[] = [];
+    ordersMap.forEach((items, orderNo) => {
+      const freight = items.find((t) => t.isFreight);
+      if (!freight) return;
+      taikoFreightOrders.push({
+        orderNo,
+        con: items[0].customerOrderNo,
+        deliveryName: items[0].deliveryName,
+        itemNames: items.filter((t) => !t.isFreight).map((t) => t.itemName),
+        amount: freight.amount,
+      });
+    });
+
+    const lifePool = lifeFreightLines;
+    const usedLife = new Set<number>();
+    const matched: FreightMatch[] = [];
+    const unmatchedTaiko: typeof taikoFreightOrders = [];
+    taikoFreightOrders.forEach((t) => {
+      let best = -1;
+      let bestScore = 0;
+      lifePool.forEach((l, i) => {
+        if (usedLife.has(i)) return;
+        if (!storeMatches(l.storeCode, l.storeName, t.deliveryName)) return;
+        const s = t.itemNames.reduce((max, nm) => Math.max(max, nameSimilarity(l.freightItemDesc, nm)), 0);
+        if (s > bestScore) {
+          bestScore = s;
+          best = i;
+        }
+      });
+      if (best >= 0 && bestScore > 0.3) {
+        usedLife.add(best);
+        matched.push({ ...t, taikoOrderNo: t.orderNo, score: bestScore });
+      } else {
+        unmatchedTaiko.push(t);
+      }
+    });
+
+    // 2巡目: 品目名では一致しなかったもの(表記違い・修理返品などの特殊なケース)を、
+    // 店舗+送料の金額が完全一致し、かつ候補が1件だけに絞れる場合のみ救済する。
+    const stillUnmatched: typeof taikoFreightOrders = [];
+    unmatchedTaiko.forEach((t) => {
+      const candidates = lifePool
+        .map((l, i) => ({ l, i }))
+        .filter(
+          ({ l, i }) => !usedLife.has(i) && storeMatches(l.storeCode, l.storeName, t.deliveryName) && Math.abs(l.amount - t.amount) < 1
+        );
+      if (candidates.length === 1) {
+        usedLife.add(candidates[0].i);
+        matched.push({ ...t, taikoOrderNo: t.orderNo, score: -1 });
+      } else {
+        stillUnmatched.push(t);
+      }
+    });
+
+    const unusedLife = lifePool.filter((_, i) => !usedLife.has(i));
+    return { matched, unmatchedTaiko: stillUnmatched, unusedLife, totalTaikoFreightOrders: taikoFreightOrders.length };
+  }, [taikoLines, lifeFreightLines]);
 
   const filteredResults = useMemo(() => {
     let r = results;
@@ -733,12 +818,57 @@ export default function LifeBillingCheck() {
             </p>
           </div>
 
-          <details className="card" style={{ marginBottom: 20 }} open>
+          <div className="card" style={{ marginBottom: 20, borderColor: freightMatchResult.unmatchedTaiko.length > 0 ? "var(--critical)" : undefined }}>
+            <h2 style={{ marginTop: 0 }}>ライフのシステムにまだ送料が追加されていない受注</h2>
+            <p className="cell-sub" style={{ marginTop: -6, marginBottom: 10 }}>
+              太幸の運賃({freightMatchResult.matched.length + freightMatchResult.unmatchedTaiko.length}件)を、店舗+品目でライフの送料行と1件ずつ突き合わせました。{freightMatchResult.matched.length}件は一致する送料行が見つかっています。下の{freightMatchResult.unmatchedTaiko.length}件は、まだライフのシステムに送料が追加されていない可能性があります(品目の書き方が違うだけで実際は追加済みのケースもあるため、追加前に念のため実際にライフのシステムを確認してください)。
+            </p>
+            {freightMatchResult.unmatchedTaiko.length === 0 ? (
+              <div className="empty-state">対象月の太幸の運賃は、すべてライフの送料行と対応が取れました</div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>受注番号</th>
+                    <th>客先注番</th>
+                    <th>納入先</th>
+                    <th>太幸の品名</th>
+                    <th className="num">追加が必要な送料</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {freightMatchResult.unmatchedTaiko.map((t) => (
+                    <tr key={t.orderNo}>
+                      <td>{t.orderNo}</td>
+                      <td>{t.con || "(なし)"}</td>
+                      <td>{t.deliveryName}</td>
+                      <td>{t.itemNames.join(" / ")}</td>
+                      <td className="num" style={{ fontWeight: 700, color: "var(--critical)" }}>
+                        {fmtYen(t.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} style={{ fontWeight: 700 }}>
+                      合計
+                    </td>
+                    <td className="num" style={{ fontWeight: 700, color: "var(--critical)" }}>
+                      {fmtYen(freightMatchResult.unmatchedTaiko.reduce((s, t) => s + t.amount, 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            )}
+          </div>
+
+          <details className="card" style={{ marginBottom: 20 }}>
             <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-              送料・運賃の明細を見る(自動突合はできないため、並べて目視確認できるようにしています)
+              送料・運賃の明細を全件見る(店舗・概要をもとに自動で突き合わせていますが、完全ではないため元データも確認できるようにしています)
             </summary>
             <p className="cell-sub" style={{ marginTop: 8 }}>
-              ライフの「送料」行は商品コード・他伝票Noが空欄で、太幸のどの受注の運賃かを機械的に特定できません。下に両側の明細を並べているので、件数や金額の並びを見比べて確認してください。
+              ライフの「送料」行自体には商品コード・他伝票Noが入っていませんが、「概要」列の商品名と店舗をもとに太幸の運賃と突き合わせています。上の一覧に出てこない品目がないか、下の元データでも確認できます。
             </p>
             <div
               style={{
