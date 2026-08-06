@@ -195,26 +195,35 @@ export default function UploadForm() {
     }
 
     if (kind === "shippingNote") {
-      // 蓄積(upsert)方式。件数が少ない想定なので分割せず1回で送る。
-      setStatus((s) => ({ ...s, totalRows: mapped.length, totalBatches: 1 }));
+      // 蓄積(upsert)方式。2026-08-06判明: 実データ(3万件超)では1回で送ると
+      // リクエストボディが大きくなりすぎ、サーバーに届く前に失敗してしまう
+      // (エラーメッセージも空になる)ことを確認したため、他の種類と同様に
+      // 1000件ずつのバッチに分割して送信する。値上げ検知・利益集計の更新
+      // (callRefreshApi)はこのデータと無関係なので行わない。
+      const batches = chunk(mapped, BATCH_SIZE);
+      setStatus((s) => ({ ...s, totalRows: mapped.length, totalBatches: batches.length }));
       let pruned: number | null = null;
-      try {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rows: mapped }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          errors.push(json.error ?? res.statusText);
-        } else {
-          sent = typeof json.inserted === "number" ? json.inserted : mapped.length;
-          pruned = typeof json.pruned === "number" ? json.pruned : null;
+
+      for (let i = 0; i < batches.length; i++) {
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rows: batches[i] }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            errors.push(`バッチ${i + 1}/${batches.length}: ${json.error ?? res.statusText}`);
+          } else {
+            sent += typeof json.inserted === "number" ? json.inserted : batches[i].length;
+            if (typeof json.pruned === "number") pruned = (pruned ?? 0) + json.pruned;
+          }
+        } catch (e) {
+          errors.push(`バッチ${i + 1}/${batches.length}: ${String(e)}`);
         }
-      } catch (e) {
-        errors.push(String(e));
+        setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors], pruned }));
       }
-      setStatus((s) => ({ ...s, sentRows: sent, doneBatches: 1, errors: [...errors], pruned }));
+
       setStatus((s) => ({ ...s, running: false, finished: true }));
       return;
     }
@@ -288,8 +297,6 @@ export default function UploadForm() {
               <div>
                 {mode === "replace"
                   ? `対象行(手配区分=在庫のうち、拠点90/91宛または納入先名1に「太幸」を含む行): ${status.totalRows.toLocaleString("ja-JP")}件`
-                  : mode === "accumulate"
-                  ? `取り込んだ行数: ${status.totalRows.toLocaleString("ja-JP")}件`
                   : `読み込んだ行数: ${status.totalRows.toLocaleString("ja-JP")}件 ／ 送信済み: ${status.sentRows.toLocaleString("ja-JP")}件 ／ バッチ ${status.doneBatches}/${status.totalBatches}`}
               </div>
             )}
