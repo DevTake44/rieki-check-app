@@ -20,6 +20,24 @@ import type { ShippingNoteMappingRow, FreightSalesLine } from "@/lib/types";
  * 3. その受注番号で sales_lines の運賃行(商品コード="99")を探し、得意先への請求額
  *    (sell_price)を取得、実費と比較する。
  *
+ * ■ 2026-08-06追記: 4パターンの状態を区別する
+ * 受注番号が判明した後、sales_lines側の状況によって次の4通りに分ける
+ * (ユーザーとの確認: 「99運賃行が無い」＝運賃の請求漏れ、「売上データ自体が無い」＝
+ * まだ未売上、はまったく意味が違うので混同しないこと):
+ *   ・matched: 受注番号があり、かつその受注に商品コード="99"(運賃)行がある
+ *     → 実際の請求額(sell_price)と実費を比較。
+ *   ・no_freight_charge: 受注番号があり、その受注の売上データ(item_code問わず)は
+ *     存在するが、運賃(コード99)行だけが無い → 売上はあるのに運賃を請求し忘れている
+ *     状態。拠点番号・営業担当・売上番号(納品書番号)はその受注の売上行から取得して
+ *     表示し、請求運賃=0円とみなして利益(0−実費)を計算する(=実費全額が持ち出しの
+ *     赤字として可視化される)。
+ *   ・no_sales_data: 受注番号はあるが、その受注の売上データ自体がsales_linesに
+ *     一件も無い(＝まだ未売上、これから売上が立つ予定など) → 判断材料が無いので
+ *     拠点番号・営業担当・売上番号・請求運賃・利益は空欄のままにする(無理に0円と
+ *     みなさない)。
+ *   ・no_mapping: 送り状番号が対応表(shipping_note_mapping)に無く、受注番号自体が
+ *     わからない → 従来通り空欄。
+ *
  * ■ 2社のファイル形式の違い
  * 西濃運輸: 月,日,原票No.,元着,区分,着地名/発地名,数量,重量,合計(運賃),
  *   内燃料サーチャージ,備考1,備考2,お客さま番号。年が無いため日付は月/日のみの表示。
@@ -47,7 +65,7 @@ type InvoiceLine = {
   sourceFile: string;
 };
 
-type MatchStatus = "matched" | "no_mapping" | "no_freight_line";
+type MatchStatus = "matched" | "no_mapping" | "no_freight_charge" | "no_sales_data";
 
 type ResultRow = {
   key: string;
@@ -179,31 +197,37 @@ export default function FreightCheck({
     return m;
   }, [mappingRows]);
 
-  const freightByOrder = useMemo(() => {
+  // 受注番号ごとの「その受注の売上データが存在するか」＋拠点番号・営業担当・
+  // 売上番号(納品書番号)・得意先名。商品コードを問わず全行から作るので、
+  // 運賃(99)行が無い受注でも(他の商品行さえあれば)ここに載る。
+  const orderInfoByOrder = useMemo(() => {
     const m = new Map<
       string,
-      {
-        sellPrice: number;
-        assumedCost: number;
-        branchCode: string | null;
-        repCode: string | null;
-        deliveryNoteNo: string | null;
-        customerName: string | null;
-      }
+      { branchCode: string | null; repCode: string | null; deliveryNoteNo: string | null; customerName: string | null }
     >();
     for (const l of freightSalesLines) {
       if (!l.order_no) continue;
       const prev = m.get(l.order_no);
-      const sellPrice = (prev?.sellPrice ?? 0) + (l.sell_price ?? 0);
-      const assumedCost = (prev?.assumedCost ?? 0) + (l.assumed_cost ?? 0);
       m.set(l.order_no, {
-        sellPrice,
-        assumedCost,
         branchCode: prev?.branchCode ?? l.branch_code,
         repCode: prev?.repCode ?? l.rep_code,
         deliveryNoteNo: prev?.deliveryNoteNo ?? l.delivery_note_no,
         customerName: prev?.customerName ?? l.customer_name,
       });
+    }
+    return m;
+  }, [freightSalesLines]);
+
+  // 受注番号ごとの、商品コード="99"(運賃)行だけを合算した金額(得意先への請求額・見込み原価)。
+  const freightByOrder = useMemo(() => {
+    const m = new Map<string, { sellPrice: number; assumedCost: number }>();
+    for (const l of freightSalesLines) {
+      if (!l.order_no) continue;
+      if (l.item_code !== "99") continue;
+      const prev = m.get(l.order_no);
+      const sellPrice = (prev?.sellPrice ?? 0) + (l.sell_price ?? 0);
+      const assumedCost = (prev?.assumedCost ?? 0) + (l.assumed_cost ?? 0);
+      m.set(l.order_no, { sellPrice, assumedCost });
     }
     return m;
   }, [freightSalesLines]);
@@ -260,18 +284,32 @@ export default function FreightCheck({
       if (!orderNo) {
         status = "no_mapping";
       } else {
+        const orderInfo = orderInfoByOrder.get(orderNo);
         const freight = freightByOrder.get(orderNo);
-        if (!freight) {
-          status = "no_freight_line";
-        } else {
+
+        if (orderInfo) {
+          branchCode = orderInfo.branchCode;
+          repCode = orderInfo.repCode;
+          deliveryNoteNo = orderInfo.deliveryNoteNo;
+          customerName = orderInfo.customerName ?? customerName;
+        }
+
+        if (freight) {
+          // 売上データがあり、かつ運賃(商品コード99)行もある → 通常の照合。
           status = "matched";
           chargedFreight = freight.sellPrice;
           assumedCost = freight.assumedCost;
-          branchCode = freight.branchCode;
-          repCode = freight.repCode;
-          deliveryNoteNo = freight.deliveryNoteNo;
-          customerName = freight.customerName ?? customerName;
           margin = chargedFreight - line.amount;
+        } else if (orderInfo) {
+          // 売上データはあるが運賃(99)行が無い → 請求漏れ。0円請求とみなして
+          // 実費全額をマイナスとして可視化する。
+          status = "no_freight_charge";
+          chargedFreight = 0;
+          margin = 0 - line.amount;
+        } else {
+          // その受注番号の売上データ自体が無い(直近4か月に一件も無い) → まだ未売上等。
+          // 判断材料が無いため空欄のままにする。
+          status = "no_sales_data";
         }
       }
 
@@ -293,7 +331,7 @@ export default function FreightCheck({
         status,
       };
     });
-  }, [invoiceLines, mappingByWaybill, freightByOrder]);
+  }, [invoiceLines, mappingByWaybill, orderInfoByOrder, freightByOrder]);
 
   const summary = useMemo(() => {
     let totalActual = 0;
@@ -301,22 +339,34 @@ export default function FreightCheck({
     let totalMargin = 0;
     let nMatched = 0;
     let nNoMapping = 0;
-    let nNoFreightLine = 0;
+    let nNoFreightCharge = 0;
+    let nNoSalesData = 0;
     let lossCount = 0;
     for (const r of results) {
       totalActual += r.actualFreight;
-      if (r.status === "matched") {
-        nMatched++;
+      // matched(運賃行あり)・no_freight_charge(運賃未請求)はどちらも請求運賃・利益が
+      // 計算できる(後者は請求運賃=0円)ので、金額サマリーにはあわせて含める。
+      if (r.status === "matched" || r.status === "no_freight_charge") {
         totalCharged += r.chargedFreight ?? 0;
         totalMargin += r.margin ?? 0;
         if ((r.margin ?? 0) < 0) lossCount++;
-      } else if (r.status === "no_mapping") {
-        nNoMapping++;
-      } else {
-        nNoFreightLine++;
       }
+      if (r.status === "matched") nMatched++;
+      else if (r.status === "no_freight_charge") nNoFreightCharge++;
+      else if (r.status === "no_sales_data") nNoSalesData++;
+      else nNoMapping++;
     }
-    return { totalActual, totalCharged, totalMargin, nMatched, nNoMapping, nNoFreightLine, lossCount, total: results.length };
+    return {
+      totalActual,
+      totalCharged,
+      totalMargin,
+      nMatched,
+      nNoMapping,
+      nNoFreightCharge,
+      nNoSalesData,
+      lossCount,
+      total: results.length,
+    };
   }, [results]);
 
   const filtered = useMemo(() => {
@@ -349,7 +399,8 @@ export default function FreightCheck({
     const statusLabel: Record<MatchStatus, string> = {
       matched: "照合済み",
       no_mapping: "対応する受注が見つからない",
-      no_freight_line: "得意先への運賃請求なし",
+      no_freight_charge: "運賃未請求(売上あり・請求漏れ)",
+      no_sales_data: "売上データなし(未売上等)",
     };
     const lines = [header.map(csvEscape).join(",")];
     for (const r of filtered) {
@@ -507,9 +558,13 @@ export default function FreightCheck({
               <div className="label">照合済み</div>
               <div className="value">{summary.nMatched.toLocaleString("ja-JP")}</div>
             </div>
-            <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("no_freight_line")}>
-              <div className="label">得意先へ運賃請求なし</div>
-              <div className="value">{summary.nNoFreightLine.toLocaleString("ja-JP")}</div>
+            <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("no_freight_charge")}>
+              <div className="label">運賃未請求(売上あり)</div>
+              <div className="value">{summary.nNoFreightCharge.toLocaleString("ja-JP")}</div>
+            </div>
+            <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("no_sales_data")}>
+              <div className="label">売上データなし(未売上等)</div>
+              <div className="value">{summary.nNoSalesData.toLocaleString("ja-JP")}</div>
             </div>
             <div className="kpi-tile" style={{ cursor: "pointer" }} onClick={() => setStatusFilter("no_mapping")}>
               <div className="label">対応する受注が見つからない</div>
@@ -518,7 +573,10 @@ export default function FreightCheck({
           </div>
 
           <div className="card" style={{ marginBottom: 20 }}>
-            <h2 style={{ marginTop: 0 }}>金額サマリー(照合済み分)</h2>
+            <h2 style={{ marginTop: 0 }}>金額サマリー(照合済み・運賃未請求分)</h2>
+            <p className="subtitle" style={{ margin: "0 0 8px" }}>
+              「売上データなし(未売上等)」「対応する受注が見つからない」分は金額が判断できないため、以下には含めていません。
+            </p>
             <table>
               <tbody>
                 <tr>
@@ -526,12 +584,12 @@ export default function FreightCheck({
                   <td style={{ textAlign: "right" }}>{fmtYen(summary.totalActual)}</td>
                 </tr>
                 <tr>
-                  <td>得意先への請求運賃合計(照合済み分のみ)</td>
+                  <td>得意先への請求運賃合計(運賃未請求分は0円として計算)</td>
                   <td style={{ textAlign: "right" }}>{fmtYen(summary.totalCharged)}</td>
                 </tr>
                 <tr>
                   <td>
-                    <strong>運賃利益合計(請求 − 実費、照合済み分のみ)</strong>
+                    <strong>運賃利益合計(請求 − 実費)</strong>
                   </td>
                   <td
                     style={{
@@ -608,7 +666,8 @@ export default function FreightCheck({
                       </td>
                       <td>
                         {r.status === "matched" && <span className="badge good">照合済み</span>}
-                        {r.status === "no_freight_line" && <span className="badge warning">得意先へ運賃請求なし</span>}
+                        {r.status === "no_freight_charge" && <span className="badge critical">運賃未請求(売上あり)</span>}
+                        {r.status === "no_sales_data" && <span className="badge neutral">売上データなし(未売上等)</span>}
                         {r.status === "no_mapping" && <span className="badge neutral">対応する受注なし</span>}
                       </td>
                     </tr>

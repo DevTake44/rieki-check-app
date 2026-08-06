@@ -30,7 +30,10 @@ export default async function FreightCheckPage() {
 
   // 運賃照合は直近の送り状問合せデータ(3か月分プール)との突き合わせが前提なので、
   // sales_lines側もそれに合わせて直近4か月程度(月ズレの余裕込み)に絞って取得する。
-  // 59,000件超ある item_code='99' 全件を毎回取得すると重いため。
+  // 2026-08-06変更: 以前はitem_code='99'(運賃)行だけに絞っていたが、
+  // 「99運賃行が無い(=運賃の請求漏れ)」と「そもそも売上データが無い(=未売上)」を
+  // 区別するため、item_codeを問わず直近分を全件取得するようにした
+  // (直近4か月で約69,000行・受注番号ベースで約2万件、他ツールと同程度の規模)。
   const sinceDate = new Date();
   sinceDate.setMonth(sinceDate.getMonth() - 4);
   const sinceStr = sinceDate.toISOString().slice(0, 10);
@@ -43,9 +46,8 @@ export default async function FreightCheckPage() {
       supabase
         .from("sales_lines")
         .select(
-          "order_no, order_line, branch_code, rep_code, delivery_note_no, customer_code, customer_name, sell_price, assumed_cost, delivery_date, id"
+          "order_no, order_line, branch_code, rep_code, delivery_note_no, customer_code, customer_name, item_code, sell_price, assumed_cost, delivery_date, id"
         )
-        .eq("item_code", "99")
         .gte("delivery_date", sinceStr)
         .order("id", { ascending: true })
         .range(from, to)
