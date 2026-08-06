@@ -59,6 +59,12 @@ const TOOLS: ToolLink[] = [
     category: "CSV照合ツール",
   },
   {
+    href: "/receivables-report",
+    title: "売掛残高月報",
+    description: "拠点別の売掛残高CSVから、当月売上・消費税・入金額・当月残高の集計と、借方売掛金／貸方商品売上・仮受消費税の簡易仕訳を自動作成します。複数拠点をまとめると全社合計も表示します。",
+    category: "CSV照合ツール",
+  },
+  {
     href: "/upload",
     title: "データ更新",
     description: "各ダッシュボードのもとになる売上・受注・仕入データをCSVからSupabaseへ取り込みます。",
