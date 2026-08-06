@@ -27,12 +27,34 @@ import { branchLabel } from "@/lib/branch-names";
  *       「仮受消費税(区分)」＝消費税 の2行ずつ(0円の区分は表示しない)
  * 借方合計と貸方合計は理論上一致する(振替伝票の実例で確認済み)。
  *
- * ■ 既知の限界:
- * このCSVには「非課税」区分が独立して存在せず、実際の振替伝票では非課税として
- * 計上されている売上も、CSV上は「10%」区分に合算されてしまっている
- * (実データで確認: 差額42,000円が非課税分)。そのため貸方の行内訳は実際の
- * 仕訳と完全には一致しないことがあるが、合計金額は一致する。
+ * ■ 得意先の税率内訳行(2026-08-06にユーザーと確認・検証済み):
+ * ある得意先の売上が複数の税率にまたがる場合、その得意先の名称行のすぐ下に、
+ * 請求先コード・カナ名称が空欄で名称だけ税率区分名("１０％"・"軽減税率"など)の
+ * 行が1つ以上続く。これは独立した別の得意先ではなく、直前の得意先の内訳
+ * (人が見れば2行以上に分解された表示だと分かる)で、内訳行の純売上額(税抜)・
+ * 消費税を合計すると、必ず得意先の名称行(本行)の値と一致する
+ * (実データで確認: 例えば板橋貿易㈱は 本行(13,000円/1,060円) = "１０％"内訳行
+ * (1,000円/100円) + "軽減税率"内訳行(12,000円/960円))。
+ *
+ * ■ 非課税の抜き出し(2026-08-06にユーザーと確認・検証済み):
+ * このCSVには「非課税」区分が独立して存在せず、非課税の売上は「10%」の
+ * 純売上額(税抜)に合算されてしまっている。ただし、非課税の対象になるのは
+ * 「10%」として扱われる金額(内訳行が無い得意先の本行、または内訳行がある
+ * 得意先の"１０％"内訳行)なので、それぞれの消費税額から「消費税÷10%」で
+ * 課税対象額を逆算し、純売上額(税抜)との差を取ると、非課税を含む得意先(の
+ * 10%部分)だけがまとまった金額(実データ例: 42,000円)として現れる
+ * (それ以外は伝票の端数丸めによる数百円未満の誤差しか出ない)。
+ * この差がNON_TAXABLE_NOISE_THRESHOLD円以上のものを「非課税を含む」とみなし、
+ * その差額を合計して「10%」区分から切り出し、「商品売上(非課税・推定)」という
+ * 独立した貸方行として表示する(実データで振替伝票の実例と完全一致を確認済み)。
  */
+
+// 得意先ごとの「消費税÷10%で逆算した課税対象額」と「純売上額(税抜)」の差が
+// この金額(円)以上なら、端数の丸め誤差ではなく非課税売上が含まれていると判断する。
+// 実データでは、非課税を含まない得意先の差は最大でも数百円(端数丸め)、
+// 非課税を含む得意先は数万円単位のまとまった金額で現れたため、
+// 十分な余裕を持ってこの値をしきい値とした。
+const NON_TAXABLE_NOISE_THRESHOLD = 1000;
 
 type CustomerRow = {
   kana: string;
@@ -49,6 +71,10 @@ type CustomerRow = {
   fee: number;
   totalReceived: number;
   currentBalance: number;
+  // 直下に税率別の内訳行(名称が"１０％"・"軽減税率"などでコード欄が空欄の行)が
+  // 続いていた場合、その内容をここに保持する。合計すると必ず本行の値と一致する。
+  // 空配列なら内訳行なし(この得意先の売上は単一の税率のみ)。
+  subRows: TaxBreakdownRow[];
 };
 
 type TaxBreakdownRow = {
@@ -71,6 +97,8 @@ type BranchTotals = {
   currentBalance: number;
 };
 
+type NonTaxableCandidate = { customerCode: string; customerName: string; amount: number };
+
 type BranchReport = {
   fileName: string;
   branchCode: string;
@@ -79,6 +107,9 @@ type BranchReport = {
   customers: CustomerRow[];
   totals: BranchTotals;
   taxBreakdown: TaxBreakdownRow[];
+  nonTaxableTotal: number;
+  nonTaxableCandidates: NonTaxableCandidate[];
+  multiRateCustomerCount: number;
 };
 
 type FileState = {
@@ -186,7 +217,8 @@ function parseReceivablesCsv(rows: string[][], fileName: string): BranchReport |
       i++;
       break;
     }
-    customers.push({
+
+    const c: CustomerRow = {
       kana: cell(r, 0),
       customerCode: cell(r, 1),
       customerName: name,
@@ -201,7 +233,22 @@ function parseReceivablesCsv(rows: string[][], fileName: string): BranchReport |
       fee: num(r, 11),
       totalReceived: num(r, 12),
       currentBalance: num(r, 13),
-    });
+      subRows: [],
+    };
+
+    // 直後に続く、請求先コード・カナ名称が空欄の行は、この得意先の税率別
+    // 内訳行(独立した得意先ではない)として吸収する。合計すると必ず本行と
+    // 一致する(実データで確認済み)。
+    for (let j = i + 1; j < dataRows.length; j++) {
+      const sub = dataRows[j];
+      const subName = cell(sub, 2);
+      if (subName === "合計") break;
+      if (cell(sub, 0) !== "" || cell(sub, 1) !== "" || !subName) break;
+      c.subRows.push({ label: subName, salesExTax: num(sub, 6), tax: num(sub, 7) });
+      i = j;
+    }
+
+    customers.push(c);
   }
 
   if (!totals) {
@@ -215,7 +262,50 @@ function parseReceivablesCsv(rows: string[][], fileName: string): BranchReport |
     taxBreakdown.push({ label, salesExTax: num(r, 6), tax: num(r, 7) });
   }
 
-  return { fileName, branchCode, branchNameRaw, period, customers, totals, taxBreakdown };
+  // 「消費税÷10%」で課税対象額を逆算し、純売上額(税抜)との差を非課税売上の
+  // 候補として拾う。内訳行がある得意先は、内訳行のうち"10%"区分のものだけを
+  // 対象にする(本行はブレンドされた合計なので対象にしない)。
+  const nonTaxableCandidates: NonTaxableCandidate[] = [];
+  let multiRateCustomerCount = 0;
+  for (const c of customers) {
+    if (c.subRows.length > 0) {
+      multiRateCustomerCount++;
+      for (const s of c.subRows) {
+        if (!isStandardRateLabel(s.label)) continue;
+        if (s.salesExTax === 0) continue;
+        const implied = Math.round(s.tax / 0.1);
+        const gap = Math.round((s.salesExTax - implied) * 100) / 100;
+        if (Math.abs(gap) >= NON_TAXABLE_NOISE_THRESHOLD) {
+          nonTaxableCandidates.push({
+            customerCode: c.customerCode,
+            customerName: `${c.customerName}(内訳:${s.label})`,
+            amount: gap,
+          });
+        }
+      }
+      continue;
+    }
+    if (c.netSalesExTax === 0) continue;
+    const impliedTaxable10 = Math.round(c.tax / 0.1);
+    const gap = Math.round((c.netSalesExTax - impliedTaxable10) * 100) / 100;
+    if (Math.abs(gap) >= NON_TAXABLE_NOISE_THRESHOLD) {
+      nonTaxableCandidates.push({ customerCode: c.customerCode, customerName: c.customerName, amount: gap });
+    }
+  }
+  const nonTaxableTotal = nonTaxableCandidates.reduce((sum, c) => sum + c.amount, 0);
+
+  return {
+    fileName,
+    branchCode,
+    branchNameRaw,
+    period,
+    customers,
+    totals,
+    taxBreakdown,
+    nonTaxableTotal,
+    nonTaxableCandidates,
+    multiRateCustomerCount,
+  };
 }
 
 function isError(v: BranchReport | { error: string }): v is { error: string } {
@@ -224,12 +314,25 @@ function isError(v: BranchReport | { error: string }): v is { error: string } {
 
 type JournalLine = { label: string; amount: number };
 
-function buildJournal(totals: BranchTotals, taxBreakdown: TaxBreakdownRow[]) {
+// 内訳行の名称が「標準10%」区分かどうかを判定する(全角/半角の"10"を許容)。
+// 非課税の推定額はこの区分の純売上額(税抜)から切り出す。
+function isStandardRateLabel(label: string): boolean {
+  return label.includes("10") || label.includes("１０");
+}
+
+function buildJournal(totals: BranchTotals, taxBreakdown: TaxBreakdownRow[], nonTaxableTotal: number) {
   const debit: JournalLine = { label: "売掛金", amount: totals.netSalesExTax + totals.tax };
   const credit: JournalLine[] = [];
   for (const b of taxBreakdown) {
-    if (b.salesExTax !== 0) credit.push({ label: `商品売上(${b.label})`, amount: b.salesExTax });
-    if (b.tax !== 0) credit.push({ label: `仮受消費税(${b.label})`, amount: b.tax });
+    if (isStandardRateLabel(b.label)) {
+      const adjustedSales = Math.round((b.salesExTax - nonTaxableTotal) * 100) / 100;
+      if (adjustedSales !== 0) credit.push({ label: `商品売上(${b.label})`, amount: adjustedSales });
+      if (b.tax !== 0) credit.push({ label: `仮受消費税(${b.label})`, amount: b.tax });
+      if (nonTaxableTotal !== 0) credit.push({ label: "商品売上(非課税・推定)", amount: nonTaxableTotal });
+    } else {
+      if (b.salesExTax !== 0) credit.push({ label: `商品売上(${b.label})`, amount: b.salesExTax });
+      if (b.tax !== 0) credit.push({ label: `仮受消費税(${b.label})`, amount: b.tax });
+    }
   }
   const creditTotal = credit.reduce((sum, c) => sum + c.amount, 0);
   return { debit, credit, creditTotal, diff: Math.round((debit.amount - creditTotal) * 100) / 100 };
@@ -271,8 +374,12 @@ export default function ReceivablesReport() {
     const totals = emptyTotals();
     const breakdownMap = new Map<string, TaxBreakdownRow>();
     let customerCount = 0;
+    let nonTaxableTotal = 0;
+    let multiRateCustomerCount = 0;
+    const nonTaxableCandidates: NonTaxableCandidate[] = [];
     for (const r of reports) {
       customerCount += r.customers.length;
+      multiRateCustomerCount += r.multiRateCustomerCount;
       totals.prevBalance += r.totals.prevBalance;
       totals.grossSales += r.totals.grossSales;
       totals.returns += r.totals.returns;
@@ -284,6 +391,8 @@ export default function ReceivablesReport() {
       totals.fee += r.totals.fee;
       totals.totalReceived += r.totals.totalReceived;
       totals.currentBalance += r.totals.currentBalance;
+      nonTaxableTotal += r.nonTaxableTotal;
+      nonTaxableCandidates.push(...r.nonTaxableCandidates);
       for (const b of r.taxBreakdown) {
         const prev = breakdownMap.get(b.label);
         breakdownMap.set(b.label, {
@@ -293,7 +402,15 @@ export default function ReceivablesReport() {
         });
       }
     }
-    return { totals, taxBreakdown: Array.from(breakdownMap.values()), customerCount, branchCount: reports.length };
+    return {
+      totals,
+      taxBreakdown: Array.from(breakdownMap.values()),
+      customerCount,
+      branchCount: reports.length,
+      nonTaxableTotal,
+      nonTaxableCandidates,
+      multiRateCustomerCount,
+    };
   }, [reports]);
 
   function csvEscape(v: unknown): string {
@@ -399,8 +516,14 @@ export default function ReceivablesReport() {
     );
   }
 
-  function renderJournal(totals: BranchTotals, taxBreakdown: TaxBreakdownRow[]) {
-    const journal = buildJournal(totals, taxBreakdown);
+  function renderJournal(
+    totals: BranchTotals,
+    taxBreakdown: TaxBreakdownRow[],
+    nonTaxableTotal: number,
+    nonTaxableCandidates: NonTaxableCandidate[],
+    multiRateCustomerCount?: number
+  ) {
+    const journal = buildJournal(totals, taxBreakdown, nonTaxableTotal);
     const balanced = Math.abs(journal.diff) < 1;
     return (
       <div>
@@ -431,6 +554,23 @@ export default function ReceivablesReport() {
           </span>{" "}
           {balanced ? <span className="badge good">バランス一致</span> : <span className="badge critical">不一致</span>}
         </div>
+        {nonTaxableCandidates.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 13 }}>
+            非課税と推定した得意先({nonTaxableCandidates.length}件・合計{fmtYen(nonTaxableTotal)}):
+            <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+              {nonTaxableCandidates.map((c, i) => (
+                <li key={i}>
+                  {c.customerName}({c.customerCode}) {fmtYen(c.amount)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {!!multiRateCustomerCount && (
+          <div style={{ marginTop: 4, fontSize: 12 }} className="cell-sub">
+            ※税率の内訳行が付いていた得意先{multiRateCustomerCount}件は、本行(合算値)ではなく内訳行の「10%」部分だけを非課税判定の対象にしています。
+          </div>
+        )}
       </div>
     );
   }
@@ -524,7 +664,13 @@ export default function ReceivablesReport() {
               </h2>
               {renderTotalsTable(combined.totals)}
               <h3 style={{ marginBottom: 8 }}>簡易仕訳(合算)</h3>
-              {renderJournal(combined.totals, combined.taxBreakdown)}
+              {renderJournal(
+                combined.totals,
+                combined.taxBreakdown,
+                combined.nonTaxableTotal,
+                combined.nonTaxableCandidates,
+                combined.multiRateCustomerCount
+              )}
             </div>
           )}
 
@@ -538,10 +684,7 @@ export default function ReceivablesReport() {
               </h2>
               {renderTotalsTable(r.totals)}
               <h3 style={{ marginBottom: 8 }}>簡易仕訳</h3>
-              {renderJournal(r.totals, r.taxBreakdown)}
-              <p className="cell-sub" style={{ marginTop: 8 }}>
-                ※CSVの「10%」区分には非課税売上が合算されている場合があるため、実際の振替伝票の行内訳(非課税を独立科目で計上する場合など)とは一部異なることがあります。合計金額は一致します。
-              </p>
+              {renderJournal(r.totals, r.taxBreakdown, r.nonTaxableTotal, r.nonTaxableCandidates, r.multiRateCustomerCount)}
             </div>
           ))}
 
