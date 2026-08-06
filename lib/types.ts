@@ -78,3 +78,30 @@ export type TransferPendingLine = {
   assumed_cost: number | null;
   created_at: string;
 };
+
+// public.shipping_note_mapping テーブルの1行の型(運賃照合・送り状番号↔受注番号の対応表)
+export type ShippingNoteMappingRow = {
+  id: number;
+  waybill_no: string;
+  order_no: string | null;
+  package_count: number | null;
+  carrier_code: string | null;
+  carrier_name: string | null;
+  customer_code: string | null;
+  customer_name: string | null;
+  issue_date: string | null;
+  created_at: string;
+};
+
+// sales_lines のうち item_code='99'(運賃)行だけを抜き出した型(運賃照合機能で使う)。
+// 得意先に実際に請求した運賃(sell_price)と、社内の見込み原価(assumed_cost)を持つ。
+export type FreightSalesLine = {
+  order_no: string | null;
+  order_line: string | null;
+  branch_code: string | null;
+  customer_code: string | null;
+  customer_name: string | null;
+  sell_price: number | null;
+  assumed_cost: number | null;
+  delivery_date: string | null;
+};

@@ -225,6 +225,11 @@ export function mapSalesRow(cols: string[]): SalesRowInsert | null {
 //     12行・2,032,150円が未取り込みだったことを確認して修正。)
 //   ・それ以外の拠点の場合は、従来通り納入先名1に「太幸」を含む(＝納入先が実在の
 //     外部得意先ではなく自社拠点/倉庫)行だけを対象とする。
+//
+// 2026-08-05に「納品総数量0(未売上)なら宛先を問わず全件拾う」方式も試したが、
+// 実在する得意先向けの未納品注文まで大量に混ざる(実データで約7割相当)ことが
+// 確認されたため、ユーザーの判断でこの拠点90/91＋太幸表記による絞り込み方式に
+// 戻した。あえて広げない。
 // この関数を通過する行は少数(実データで1777行中60〜70件程度)になる想定で、
 // stock_transfer_pending テーブルはアップロードのたびに全件洗い替えする。
 const INTERNAL_WAREHOUSE_BRANCH_CODES = new Set(["90", "91"]);
@@ -258,6 +263,46 @@ export function mapTransferRow(cols: string[]): TransferRowInsert | null {
     order_qty: numOrNull(cols, 34),
     delivery_qty: numOrNull(cols, 37),
     assumed_cost: numOrNull(cols, 53),
+  };
+}
+
+// 「送り状問合せ」CSVの行を、shipping_note_mapping テーブル用に変換する。
+// 運賃照合機能(2026-08-06追加)で使う、送り状番号(＝運送会社の請求データ側の
+// 「原票No.」と同じ体系) ↔ 自社の受注番号 の対応表。
+// 列構成(0始まり、実データで確認): 0=得意先コード, 1=得意先名, 2=状態, 3=受注番号,
+// 4=個口, 5=営業担当者コード, 6=営業担当者名, 7=運送会社コード, 8=運送会社名,
+// 9=荷受人, 10=発行日, 11=時刻, 12〜14=記事1〜3, 15=送り状番号,
+// 16=入力担当者コード, 17=入力担当者名, 18=荷造担当者コード, 19=荷造り担当者名。
+export type ShippingNoteRowInsert = {
+  waybill_no: string;
+  order_no: string | null;
+  package_count: number | null;
+  carrier_code: string | null;
+  carrier_name: string | null;
+  customer_code: string | null;
+  customer_name: string | null;
+  issue_date: string | null;
+};
+
+const MIN_SHIPPING_NOTE_COLS = 16;
+
+export function mapShippingNoteRow(cols: string[]): ShippingNoteRowInsert | null {
+  if (isBlankRow(cols)) return null;
+  if (cols.length < MIN_SHIPPING_NOTE_COLS) return null;
+
+  const waybill_no = textOrNull(cols, 15);
+  // 送り状番号が無い行は突き合わせのキーが無いので取り込まない。
+  if (!waybill_no) return null;
+
+  return {
+    waybill_no,
+    order_no: textOrNull(cols, 3),
+    package_count: numOrNull(cols, 4),
+    carrier_code: textOrNull(cols, 7),
+    carrier_name: textOrNull(cols, 8),
+    customer_code: textOrNull(cols, 0),
+    customer_name: textOrNull(cols, 1),
+    issue_date: dateOrNull(cols, 10),
   };
 }
 

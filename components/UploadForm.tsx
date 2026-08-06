@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import Papa from "papaparse";
-import { mapSalesRow, mapPurchaseRow, mapTransferRow } from "@/lib/row-mapping";
-import type { SalesRowInsert, PurchaseRowInsert, TransferRowInsert } from "@/lib/row-mapping";
+import { mapSalesRow, mapPurchaseRow, mapTransferRow, mapShippingNoteRow } from "@/lib/row-mapping";
+import type { SalesRowInsert, PurchaseRowInsert, TransferRowInsert, ShippingNoteRowInsert } from "@/lib/row-mapping";
 
-type Kind = "sales" | "purchase" | "transfer";
+type Kind = "sales" | "purchase" | "transfer" | "shippingNote";
 
 type Status = {
   fileName: string;
@@ -20,6 +20,7 @@ type Status = {
   refreshing: boolean;
   refreshed: boolean;
   duplicatesRemoved: number | null;
+  pruned: number | null;
 };
 
 const BATCH_SIZE = 1000;
@@ -38,6 +39,7 @@ function initialStatus(): Status {
     refreshing: false,
     refreshed: false,
     duplicatesRemoved: null,
+    pruned: null,
   };
 }
 
@@ -98,10 +100,17 @@ export default function UploadForm() {
   const [salesStatus, setSalesStatus] = useState<Status>(initialStatus());
   const [purchaseStatus, setPurchaseStatus] = useState<Status>(initialStatus());
   const [transferStatus, setTransferStatus] = useState<Status>(initialStatus());
+  const [shippingNoteStatus, setShippingNoteStatus] = useState<Status>(initialStatus());
 
   async function handleFile(kind: Kind, file: File) {
     const setStatus =
-      kind === "sales" ? setSalesStatus : kind === "purchase" ? setPurchaseStatus : setTransferStatus;
+      kind === "sales"
+        ? setSalesStatus
+        : kind === "purchase"
+        ? setPurchaseStatus
+        : kind === "transfer"
+        ? setTransferStatus
+        : setShippingNoteStatus;
     setStatus({ ...initialStatus(), fileName: file.name, running: true });
 
     let text: string;
@@ -124,10 +133,13 @@ export default function UploadForm() {
     const parsed = Papa.parse<string[]>(text, { skipEmptyLines: true });
     const dataRows = parsed.data.slice(1); // 1行目はヘッダー行なので除外
 
-    const mapper = kind === "sales" ? mapSalesRow : kind === "purchase" ? mapPurchaseRow : mapTransferRow;
+    const mapper =
+      kind === "sales" ? mapSalesRow : kind === "purchase" ? mapPurchaseRow : kind === "transfer" ? mapTransferRow : mapShippingNoteRow;
     const mapped = dataRows
       .map((cols) => mapper(cols))
-      .filter((r): r is SalesRowInsert | PurchaseRowInsert | TransferRowInsert => r !== null);
+      .filter(
+        (r): r is SalesRowInsert | PurchaseRowInsert | TransferRowInsert | ShippingNoteRowInsert => r !== null
+      );
 
     // transfer(社内間・未納品の拠点間移動)は、対象外の行が最初から捨てられる設計
     // (手配区分=在庫の行のうち、拠点90/91宛は無条件、それ以外は納入先名1に「太幸」を
@@ -147,7 +159,13 @@ export default function UploadForm() {
     }
 
     const endpoint =
-      kind === "sales" ? "/api/upload/sales" : kind === "purchase" ? "/api/upload/purchase" : "/api/upload/transfer";
+      kind === "sales"
+        ? "/api/upload/sales"
+        : kind === "purchase"
+        ? "/api/upload/purchase"
+        : kind === "transfer"
+        ? "/api/upload/transfer"
+        : "/api/upload/shipping-note";
     let sent = 0;
     const errors: string[] = [];
 
@@ -172,6 +190,31 @@ export default function UploadForm() {
         errors.push(String(e));
       }
       setStatus((s) => ({ ...s, sentRows: sent, doneBatches: 1, errors: [...errors], duplicatesRemoved }));
+      setStatus((s) => ({ ...s, running: false, finished: true }));
+      return;
+    }
+
+    if (kind === "shippingNote") {
+      // 蓄積(upsert)方式。件数が少ない想定なので分割せず1回で送る。
+      setStatus((s) => ({ ...s, totalRows: mapped.length, totalBatches: 1 }));
+      let pruned: number | null = null;
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: mapped }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errors.push(json.error ?? res.statusText);
+        } else {
+          sent = typeof json.inserted === "number" ? json.inserted : mapped.length;
+          pruned = typeof json.pruned === "number" ? json.pruned : null;
+        }
+      } catch (e) {
+        errors.push(String(e));
+      }
+      setStatus((s) => ({ ...s, sentRows: sent, doneBatches: 1, errors: [...errors], pruned }));
       setStatus((s) => ({ ...s, running: false, finished: true }));
       return;
     }
@@ -213,7 +256,14 @@ export default function UploadForm() {
     setStatus((s) => ({ ...s, running: false, finished: true }));
   }
 
-  function renderBlock(kind: Kind, label: string, hint: string, status: Status, replaceMode = false) {
+  function renderBlock(
+    kind: Kind,
+    label: string,
+    hint: string,
+    status: Status,
+    mode: "batch" | "replace" | "accumulate" = "batch"
+  ) {
+    const replaceMode = mode === "replace";
     return (
       <div className="card" style={{ marginBottom: 20 }}>
         <h2 style={{ marginTop: 0 }}>{label}</h2>
@@ -234,16 +284,18 @@ export default function UploadForm() {
           <div style={{ marginTop: 12, fontSize: 13 }}>
             <div>ファイル: {status.fileName}</div>
             {status.detectedEncoding && <div>判定した文字コード: {status.detectedEncoding}</div>}
-            {(status.totalRows > 0 || (replaceMode && status.finished)) && (
+            {(status.totalRows > 0 || (mode !== "batch" && status.finished)) && (
               <div>
-                {replaceMode
+                {mode === "replace"
                   ? `対象行(手配区分=在庫のうち、拠点90/91宛または納入先名1に「太幸」を含む行): ${status.totalRows.toLocaleString("ja-JP")}件`
+                  : mode === "accumulate"
+                  ? `取り込んだ行数: ${status.totalRows.toLocaleString("ja-JP")}件`
                   : `読み込んだ行数: ${status.totalRows.toLocaleString("ja-JP")}件 ／ 送信済み: ${status.sentRows.toLocaleString("ja-JP")}件 ／ バッチ ${status.doneBatches}/${status.totalBatches}`}
               </div>
             )}
             {status.running && !status.refreshing && (
               <div style={{ color: "var(--direct)", marginTop: 4 }}>
-                {replaceMode ? "置き換え中…" : "アップロード中…"}
+                {mode === "replace" ? "置き換え中…" : mode === "accumulate" ? "取り込み中…" : "アップロード中…"}
               </div>
             )}
             {status.refreshing && (
@@ -253,13 +305,20 @@ export default function UploadForm() {
             )}
             {status.finished && status.errors.length === 0 && (
               <div style={{ color: "var(--good)", marginTop: 4 }}>
-                {replaceMode
+                {mode === "replace"
                   ? `完了しました。既存データを削除し、${status.sentRows.toLocaleString("ja-JP")}件で置き換えました。`
+                  : mode === "accumulate"
+                  ? `完了しました。${status.sentRows.toLocaleString("ja-JP")}件を取り込みました(送り状番号が同じ行は上書き)。`
                   : "完了しました。"}
                 {status.refreshed && "値上げ検知・売上利益の集計も更新済みです。"}
                 {replaceMode && status.duplicatesRemoved !== null && status.duplicatesRemoved > 0 && (
                   <div style={{ color: "var(--direct)" }}>
                     うち、受注番号・受注行番号が重複していた{status.duplicatesRemoved.toLocaleString("ja-JP")}件は自動的に1件にまとめて取り込みました(金額の二重計上を防止)。
+                  </div>
+                )}
+                {mode === "accumulate" && status.pruned !== null && status.pruned > 0 && (
+                  <div style={{ color: "var(--direct)" }}>
+                    あわせて、発行日が3か月より前の古いデータ{status.pruned.toLocaleString("ja-JP")}件を削除しました。
                   </div>
                 )}
               </div>
@@ -298,7 +357,14 @@ export default function UploadForm() {
         "社内間(未納品の拠点間移動)",
         "受注出力CSV(受注データ、売上データと同じ54列構成)を選択してください。手配区分=在庫かつ納入先名1に「太幸」を含む行だけを取り込みます。アップロードのたびに既存データを全件削除してから置き換えます(今この瞬間のスナップショットとして扱うため)。受注番号・受注行番号が同じ行が万一含まれていても自動的に1件にまとめるため、重複計上の心配はありません。",
         transferStatus,
-        true
+        "replace"
+      )}
+      {renderBlock(
+        "shippingNote",
+        "送り状問合せデータ(運賃照合用)",
+        "送り状問合せCSVを選択してください(得意先コード・受注番号・運送会社名・送り状番号などを含む列構成)。送り状番号をキーに蓄積(upsert)され、発行日が3か月より前の古いデータは自動的に削除されます。",
+        shippingNoteStatus,
+        "accumulate"
       )}
       <a
         href="/benrinet-check"
@@ -327,6 +393,13 @@ export default function UploadForm() {
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         ライフ請求金額照合
+      </a>
+      <a
+        href="/freight-check"
+        className="ghost-btn"
+        style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
+      >
+        運賃照合
       </a>
       <a href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
         ← メニューに戻る

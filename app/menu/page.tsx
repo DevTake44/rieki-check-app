@@ -53,6 +53,12 @@ const TOOLS: ToolLink[] = [
     category: "CSV照合ツール",
   },
   {
+    href: "/freight-check",
+    title: "運賃照合",
+    description: "西濃運輸・福山通運の請求CSVを、送り状番号↔受注番号の対応データ経由で自社売上(商品コード99・運賃)と突き合わせ、請求運賃と実費の差(利益)を一覧化します。",
+    category: "CSV照合ツール",
+  },
+  {
     href: "/upload",
     title: "データ更新",
     description: "各ダッシュボードのもとになる売上・受注・仕入データをCSVからSupabaseへ取り込みます。",
