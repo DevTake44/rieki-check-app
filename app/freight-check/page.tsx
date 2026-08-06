@@ -42,7 +42,9 @@ export default async function FreightCheckPage() {
     fetchAll<FreightSalesLine>((from, to) =>
       supabase
         .from("sales_lines")
-        .select("order_no, order_line, branch_code, customer_code, customer_name, sell_price, assumed_cost, delivery_date, id")
+        .select(
+          "order_no, order_line, branch_code, rep_code, delivery_note_no, customer_code, customer_name, sell_price, assumed_cost, delivery_date, id"
+        )
         .eq("item_code", "99")
         .gte("delivery_date", sinceStr)
         .order("id", { ascending: true })

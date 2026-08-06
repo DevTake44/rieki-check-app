@@ -58,6 +58,8 @@ type ResultRow = {
   orderNo: string | null;
   customerName: string | null;
   branchCode: string | null;
+  repCode: string | null;
+  deliveryNoteNo: string | null;
   actualFreight: number;
   chargedFreight: number | null;
   assumedCost: number | null;
@@ -169,6 +171,7 @@ export default function FreightCheck({
   const [fileState, setFileState] = useState<FileState>(initialFileState());
   const [invoiceLines, setInvoiceLines] = useState<InvoiceLine[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | MatchStatus>("all");
+  const [dragOver, setDragOver] = useState(false);
 
   const mappingByWaybill = useMemo(() => {
     const m = new Map<string, ShippingNoteMappingRow>();
@@ -177,7 +180,17 @@ export default function FreightCheck({
   }, [mappingRows]);
 
   const freightByOrder = useMemo(() => {
-    const m = new Map<string, { sellPrice: number; assumedCost: number; branchCode: string | null; customerName: string | null }>();
+    const m = new Map<
+      string,
+      {
+        sellPrice: number;
+        assumedCost: number;
+        branchCode: string | null;
+        repCode: string | null;
+        deliveryNoteNo: string | null;
+        customerName: string | null;
+      }
+    >();
     for (const l of freightSalesLines) {
       if (!l.order_no) continue;
       const prev = m.get(l.order_no);
@@ -187,6 +200,8 @@ export default function FreightCheck({
         sellPrice,
         assumedCost,
         branchCode: prev?.branchCode ?? l.branch_code,
+        repCode: prev?.repCode ?? l.rep_code,
+        deliveryNoteNo: prev?.deliveryNoteNo ?? l.delivery_note_no,
         customerName: prev?.customerName ?? l.customer_name,
       });
     }
@@ -238,6 +253,8 @@ export default function FreightCheck({
       let assumedCost: number | null = null;
       let customerName: string | null = mapRow?.customer_name ?? null;
       let branchCode: string | null = null;
+      let repCode: string | null = null;
+      let deliveryNoteNo: string | null = null;
       let margin: number | null = null;
 
       if (!orderNo) {
@@ -251,6 +268,8 @@ export default function FreightCheck({
           chargedFreight = freight.sellPrice;
           assumedCost = freight.assumedCost;
           branchCode = freight.branchCode;
+          repCode = freight.repCode;
+          deliveryNoteNo = freight.deliveryNoteNo;
           customerName = freight.customerName ?? customerName;
           margin = chargedFreight - line.amount;
         }
@@ -265,6 +284,8 @@ export default function FreightCheck({
         orderNo,
         customerName,
         branchCode,
+        repCode,
+        deliveryNoteNo,
         actualFreight: line.amount,
         chargedFreight,
         assumedCost,
@@ -316,7 +337,9 @@ export default function FreightCheck({
       "日付",
       "受注番号",
       "得意先名",
-      "拠点コード",
+      "拠点番号",
+      "営業担当",
+      "売上番号(納品書番号)",
       "実費運賃",
       "得意先への請求運賃",
       "見込み原価",
@@ -338,6 +361,8 @@ export default function FreightCheck({
           r.orderNo ?? "",
           r.customerName ?? "",
           r.branchCode ?? "",
+          r.repCode ?? "",
+          r.deliveryNoteNo ?? "",
           Math.round(r.actualFreight),
           r.chargedFreight !== null ? Math.round(r.chargedFreight) : "",
           r.assumedCost !== null ? Math.round(r.assumedCost) : "",
@@ -398,21 +423,62 @@ export default function FreightCheck({
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 20 }}>
+      <div
+        className="card"
+        style={{ marginBottom: 20 }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
+        }}
+      >
         <h2 style={{ marginTop: 0 }}>② 運送会社の請求データ</h2>
         <p className="subtitle" style={{ margin: "0 0 12px" }}>
           西濃運輸・福山通運どちらの請求CSVもドラッグ&ドロップまたは選択できます(ヘッダー行から自動判別)。複数ファイルをまとめて選択可能です。
         </p>
-        <input
-          type="file"
-          accept=".csv"
-          multiple
-          disabled={fileState.loading}
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
-            e.target.value = "";
+        <label
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: "28px 12px",
+            borderRadius: 8,
+            border: dragOver ? "2px dashed var(--direct)" : "2px dashed var(--border, #d0d5dd)",
+            background: dragOver ? "rgba(37, 99, 235, 0.06)" : "transparent",
+            cursor: fileState.loading ? "default" : "pointer",
+            textAlign: "center",
+            transition: "border-color 0.1s, background 0.1s",
           }}
-        />
+        >
+          <span style={{ fontSize: 13, color: dragOver ? "var(--direct)" : undefined }}>
+            {dragOver ? "ここにドロップ" : "ここに請求CSVをドラッグ&ドロップ、またはクリックして選択"}
+          </span>
+          <input
+            type="file"
+            accept=".csv"
+            multiple
+            disabled={fileState.loading}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </label>
         {fileState.fileNames.length > 0 && (
           <div style={{ marginTop: 12, fontSize: 13 }}>
             <div>ファイル: {fileState.fileNames.join(", ")}</div>
@@ -510,6 +576,9 @@ export default function FreightCheck({
                     <th>日付</th>
                     <th>受注番号</th>
                     <th>得意先名</th>
+                    <th>拠点番号</th>
+                    <th>営業担当</th>
+                    <th>売上番号</th>
                     <th style={{ textAlign: "right" }}>実費運賃</th>
                     <th style={{ textAlign: "right" }}>請求運賃</th>
                     <th style={{ textAlign: "right" }}>利益</th>
@@ -524,6 +593,9 @@ export default function FreightCheck({
                       <td>{r.dateLabel}</td>
                       <td>{r.orderNo ?? "―"}</td>
                       <td>{r.customerName ?? "―"}</td>
+                      <td>{r.branchCode ?? "―"}</td>
+                      <td>{r.repCode ?? "―"}</td>
+                      <td>{r.deliveryNoteNo ?? "―"}</td>
                       <td style={{ textAlign: "right" }}>{fmtYen(r.actualFreight)}</td>
                       <td style={{ textAlign: "right" }}>{fmtYen(r.chargedFreight)}</td>
                       <td

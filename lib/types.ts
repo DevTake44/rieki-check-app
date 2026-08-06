@@ -95,10 +95,14 @@ export type ShippingNoteMappingRow = {
 
 // sales_lines のうち item_code='99'(運賃)行だけを抜き出した型(運賃照合機能で使う)。
 // 得意先に実際に請求した運賃(sell_price)と、社内の見込み原価(assumed_cost)を持つ。
+// 2026-08-06追記: 一覧に拠点番号・営業担当・売上番号(納品書番号)も表示したいという
+// 要望を受け、rep_code・delivery_note_noを追加。
 export type FreightSalesLine = {
   order_no: string | null;
   order_line: string | null;
   branch_code: string | null;
+  rep_code: string | null;
+  delivery_note_no: string | null;
   customer_code: string | null;
   customer_name: string | null;
   sell_price: number | null;
