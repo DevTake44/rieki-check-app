@@ -70,6 +70,12 @@ const TOOLS: ToolLink[] = [
     description: "各ダッシュボードのもとになる売上・受注・仕入データをCSVからSupabaseへ取り込みます。",
     category: "データ管理",
   },
+  {
+    href: "/data-status",
+    title: "データ更新状況",
+    description: "売上・仕入・社内間・送り状問合せデータが、それぞれ今どこまで(いつの日付まで)入っているかを一覧で確認します。",
+    category: "データ管理",
+  },
 ];
 
 const CATEGORY_ORDER = ["ダッシュボード", "CSV照合ツール", "データ管理"];
