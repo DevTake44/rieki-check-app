@@ -101,6 +101,12 @@ export default function UploadForm() {
   const [purchaseStatus, setPurchaseStatus] = useState<Status>(initialStatus());
   const [transferStatus, setTransferStatus] = useState<Status>(initialStatus());
   const [shippingNoteStatus, setShippingNoteStatus] = useState<Status>(initialStatus());
+  const [dragOver, setDragOver] = useState<Record<Kind, boolean>>({
+    sales: false,
+    purchase: false,
+    transfer: false,
+    shippingNote: false,
+  });
 
   async function handleFile(kind: Kind, file: File) {
     const setStatus =
@@ -273,22 +279,66 @@ export default function UploadForm() {
     mode: "batch" | "replace" | "accumulate" = "batch"
   ) {
     const replaceMode = mode === "replace";
+    const isDragOver = dragOver[kind];
     return (
-      <div className="card" style={{ marginBottom: 20 }}>
+      <div
+        className="card"
+        style={{ marginBottom: 20 }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!status.running) setDragOver((d) => ({ ...d, [kind]: true }));
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (!status.running) setDragOver((d) => ({ ...d, [kind]: true }));
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          setDragOver((d) => ({ ...d, [kind]: false }));
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver((d) => ({ ...d, [kind]: false }));
+          if (status.running) return;
+          const f = e.dataTransfer.files?.[0];
+          if (f) handleFile(kind, f);
+        }}
+      >
         <h2 style={{ marginTop: 0 }}>{label}</h2>
         <p className="subtitle" style={{ margin: "0 0 12px" }}>
           {hint}
         </p>
-        <input
-          type="file"
-          accept=".csv"
-          disabled={status.running}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) handleFile(kind, f);
-            e.target.value = "";
+        <label
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: "22px 12px",
+            borderRadius: 8,
+            border: isDragOver ? "2px dashed var(--direct)" : "2px dashed var(--border, #d0d5dd)",
+            background: isDragOver ? "rgba(37, 99, 235, 0.06)" : "transparent",
+            cursor: status.running ? "default" : "pointer",
+            textAlign: "center",
+            transition: "border-color 0.1s, background 0.1s",
           }}
-        />
+        >
+          <span style={{ fontSize: 13, color: isDragOver ? "var(--direct)" : undefined }}>
+            {isDragOver ? "ここにドロップ" : "ここにCSVをドラッグ&ドロップ、またはクリックして選択"}
+          </span>
+          <input
+            type="file"
+            accept=".csv"
+            disabled={status.running}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFile(kind, f);
+              e.target.value = "";
+            }}
+          />
+        </label>
         {status.fileName && (
           <div style={{ marginTop: 12, fontSize: 13 }}>
             <div>ファイル: {status.fileName}</div>
