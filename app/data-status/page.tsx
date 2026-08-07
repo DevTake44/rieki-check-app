@@ -49,7 +49,7 @@ async function fetchOne(
     .order(column, { ascending })
     .limit(1);
   if (error || !data || data.length === 0) return null;
-  const row = data[0] as Record<string, unknown>;
+  const row = data[0] as unknown as Record<string, unknown>;
   const v = row[column];
   return v === null || v === undefined ? null : String(v);
 }
@@ -93,8 +93,8 @@ async function fetchStatus(
         .order(cfg.dateColumn, { ascending: false })
         .limit(1),
     ]);
-    const bMinRow = bMin.data?.[0] as Record<string, unknown> | undefined;
-    const bMaxRow = bMax.data?.[0] as Record<string, unknown> | undefined;
+    const bMinRow = bMin.data?.[0] as unknown as Record<string, unknown> | undefined;
+    const bMaxRow = bMax.data?.[0] as unknown as Record<string, unknown> | undefined;
     lastBatchMinDate = bMinRow ? String(bMinRow[cfg.dateColumn] ?? "") || null : null;
     lastBatchMaxDate = bMaxRow ? String(bMaxRow[cfg.dateColumn] ?? "") || null : null;
   }
