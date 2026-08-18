@@ -77,26 +77,27 @@ async function fetchStatus(
       .gte("created_at", threshold);
     lastBatchCount = batchCount ?? null;
 
-    const [bMin, bMax] = await Promise.all([
-      supabase
-        .from(cfg.table)
-        .select(cfg.dateColumn)
-        .gte("created_at", threshold)
-        .not(cfg.dateColumn, "is", null)
-        .order(cfg.dateColumn, { ascending: true })
-        .limit(1),
-      supabase
-        .from(cfg.table)
-        .select(cfg.dateColumn)
-        .gte("created_at", threshold)
-        .not(cfg.dateColumn, "is", null)
-        .order(cfg.dateColumn, { ascending: false })
-        .limit(1),
-    ]);
-    const bMinRow = bMin.data?.[0] as unknown as Record<string, unknown> | undefined;
-    const bMaxRow = bMax.data?.[0] as unknown as Record<string, unknown> | undefined;
-    lastBatchMinDate = bMinRow ? String(bMinRow[cfg.dateColumn] ?? "") || null : null;
-    lastBatchMaxDate = bMaxRow ? String(bMaxRow[cfg.dateColumn] ?? "") || null : null;
+    // 「直近バッチ」の範囲は、ORDER BY <dateColumn> LIMIT 1 という書き方だと
+    // created_atとdateColumnの相関が薄い場合にプランナがdateColumn側の
+    // インデックスでのソートを優先してしまい、created_atの絞り込みが
+    // 単なるフィルタ扱いになって数十万行スキャン→8秒タイムアウトで
+    // 500エラーになることがある(実際に発生した障害)。
+    // 直近バッチの件数は通常そこまで多くない前提で、created_at側の
+    // インデックスだけで絞り込んだ行を取得し、min/maxはアプリ側で計算する。
+    const { data: batchRows } = await supabase
+      .from(cfg.table)
+      .select(cfg.dateColumn)
+      .gte("created_at", threshold)
+      .not(cfg.dateColumn, "is", null);
+    if (batchRows && batchRows.length > 0) {
+      const values = (batchRows as unknown as Record<string, unknown>[])
+        .map((r) => r[cfg.dateColumn])
+        .filter((v): v is string | number => v !== null && v !== undefined)
+        .map(String)
+        .sort();
+      lastBatchMinDate = values[0] ?? null;
+      lastBatchMaxDate = values[values.length - 1] ?? null;
+    }
   }
 
   return {
