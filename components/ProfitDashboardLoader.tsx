@@ -9,15 +9,23 @@ import type { ProfitOrder } from "@/lib/types";
 // 500エラーになる(実際に発生した障害)。そのため app/profit/page.tsx 側では取得せず、
 // このコンポーネントがブラウザ上で /api/profit-orders を何回かに分けて呼び出し、
 // 手元で全件を組み立ててから ProfitDashboard に渡す。
-const CHUNK_SIZE = 3000;
+const REQUESTED_CHUNK_SIZE = 3000;
 const CONCURRENCY = 4;
 
-// 2026-08-18判明: 1リクエストがタイムアウトなく無応答のまま固まると、
-// Promise.allで待っているバッチ全体が永遠に止まってしまい、エラーも出ずに
-// 「読み込み中… 13,000 / 88,481 件」のまま進まなくなる不具合があった。
-// これを防ぐため、リクエストごとにタイムアウトと再試行を設ける。
+// 2026-08-26判明(重要): SupabaseのREST API(PostgREST)には1リクエストあたりの
+// 最大件数(Max Rows)設定があり、この案件の環境では要求した3000件ではなく実際には
+// もっと少ない件数(例: 1000件)しか返ってこないことが分かった。
+// 従来のコードは「1回のリクエストで必ずCHUNK_SIZE件返ってくる」という前提で
+// 次のoffsetを機械的に+3000ずつ進めていたため、実際の返却件数がそれより少ないと
+// 途中の受注が読み飛ばされたまま「読み込み完了」になってしまい、エラーも出ずに
+// 経営マトリクスの売上が本来の約3分の1程度になる、という不具合が発生していた
+// (拠点別マトリクスで東京・10月が本来154,051,945円のはずが53,688,899円と表示された
+// 実際の障害。53,688,899 ÷ 154,051,945 ≈ 34.9%で、1000件/3000件要求の比率と一致)。
+// そのため、次のoffsetは「要求した件数」ではなく「実際に返ってきた件数」を基準に
+// 進めるようにし、最後に合計件数が一致するかも必ず検証する。
 const REQUEST_TIMEOUT_MS = 20000;
 const MAX_RETRIES = 3;
+const MAX_GAP_FILL_ROUNDS = 20;
 
 type ChunkResponse = {
   rows: ProfitOrder[];
@@ -31,11 +39,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchChunkOnce(offset: number): Promise<ChunkResponse> {
+async function fetchChunkOnce(offset: number, limit: number): Promise<ChunkResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`/api/profit-orders?offset=${offset}&limit=${CHUNK_SIZE}`, {
+    const res = await fetch(`/api/profit-orders?offset=${offset}&limit=${limit}`, {
       cache: "no-store",
       signal: controller.signal,
     });
@@ -61,10 +69,10 @@ async function fetchChunkOnce(offset: number): Promise<ChunkResponse> {
   }
 }
 
-async function fetchChunk(offset: number): Promise<ChunkResponse> {
+async function fetchChunk(offset: number, limit: number): Promise<ChunkResponse> {
   let last: ChunkResponse = { rows: [], total: null, offset, hasMore: false, error: "不明なエラー" };
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const result = await fetchChunkOnce(offset);
+    const result = await fetchChunkOnce(offset, limit);
     if (!result.error) return result;
     last = result;
     if (attempt < MAX_RETRIES) {
@@ -90,38 +98,73 @@ export default function ProfitDashboardLoader() {
     let cancelled = false;
 
     (async () => {
-      const first = await fetchChunk(0);
+      const first = await fetchChunk(0, REQUESTED_CHUNK_SIZE);
       if (cancelled) return;
       if (first.error || first.total === null) {
         setError(first.error ?? "件数の取得に失敗しました");
         return;
       }
 
-      const collected: ProfitOrder[] = [...first.rows];
       const firstTotal = first.total;
+      // サーバーが実際に1回で返してくる件数(要求した件数より少ないことがある)。
+      // これを基準にoffsetを進めることで、読み飛ばしを防ぐ。
+      const actualPageSize = first.rows.length;
+
+      const collected: ProfitOrder[] = [...first.rows];
       setTotal(firstTotal);
       setLoadedCount(collected.length);
 
-      const remainingOffsets: number[] = [];
-      for (let o = first.rows.length; o < firstTotal; o += CHUNK_SIZE) {
-        remainingOffsets.push(o);
-      }
-
-      for (let i = 0; i < remainingOffsets.length; i += CONCURRENCY) {
-        const batch = remainingOffsets.slice(i, i + CONCURRENCY);
-        const results = await Promise.all(batch.map((o) => fetchChunk(o)));
-        if (cancelled) return;
-        for (const r of results) {
-          if (r.error) {
-            setError(r.error);
-            return;
-          }
-          collected.push(...r.rows);
+      if (actualPageSize > 0 && collected.length < firstTotal) {
+        const remainingOffsets: number[] = [];
+        for (let o = actualPageSize; o < firstTotal; o += actualPageSize) {
+          remainingOffsets.push(o);
         }
-        setLoadedCount(collected.length);
+
+        for (let i = 0; i < remainingOffsets.length; i += CONCURRENCY) {
+          const batch = remainingOffsets.slice(i, i + CONCURRENCY);
+          const results = await Promise.all(batch.map((o) => fetchChunk(o, REQUESTED_CHUNK_SIZE)));
+          if (cancelled) return;
+          for (const r of results) {
+            if (r.error) {
+              setError(r.error);
+              return;
+            }
+            collected.push(...r.rows);
+          }
+          setLoadedCount(collected.length);
+        }
       }
 
-      if (!cancelled) setOrders(collected);
+      // 念のための最終確認: 実際に返ってきたページサイズが途中で変わっていた場合などに
+      // 備えて、集計後に合計件数が一致するか検証し、足りなければ不足分を追加取得する。
+      let gapFillRounds = 0;
+      while (collected.length < firstTotal && gapFillRounds < MAX_GAP_FILL_ROUNDS) {
+        if (cancelled) return;
+        const r = await fetchChunk(collected.length, REQUESTED_CHUNK_SIZE);
+        if (r.error) {
+          setError(r.error);
+          return;
+        }
+        if (r.rows.length === 0) break; // これ以上取得できない(異常系)
+        collected.push(...r.rows);
+        setLoadedCount(collected.length);
+        gapFillRounds++;
+      }
+
+      if (cancelled) return;
+
+      if (collected.length !== firstTotal) {
+        setError(
+          `件数が一致しませんでした(取得: ${collected.length.toLocaleString(
+            "ja-JP"
+          )}件 / 本来: ${firstTotal.toLocaleString(
+            "ja-JP"
+          )}件)。ページを再読み込みしてください。それでも解消しない場合は開発者に連絡してください。`
+        );
+        return;
+      }
+
+      setOrders(collected);
     })();
 
     return () => {
