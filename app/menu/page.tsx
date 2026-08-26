@@ -11,7 +11,7 @@ type ToolLink = {
 
 const TOOLS: ToolLink[] = [
   {
-    href: "/",
+    href: "/price-alerts",
     title: "値上げ検知ダッシュボード",
     description: "仕入・売上データから値上げの兆候を検知して一覧表示します。",
     category: "ダッシュボード",

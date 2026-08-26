@@ -49,11 +49,20 @@ import type { ShippingNoteMappingRow, FreightSalesLine } from "@/lib/types";
  *   名称漢字区分,荷受人名称,荷受人コード,お客様出荷番号,ＪＩＳコード,輸送距離,備考,
  *   サーチャージ料。実費は「運賃+中継料+保険料+諸料金+サーチャージ料」の合計とする
  *   (運賃だけでなく実際に支払う金額全体で比較するため)。発送年月日はYYMMDD(西暦下2桁)。
+ * 西濃運輸(東京本社): 回収店コード,回収店名称,請求荷主コード,荷送人コード,荷送人名称,…,
+ *   受付年月日,元着選択,元着選択名称,お問合せ番号,お届け先名称１,…,直通運賃,諸料金,減額,
+ *   実費,運賃合計,備考,…,管理番号,… という形式。他の2社と違い、送り状番号↔受注番号の
+ *   対応表(shipping_note_mapping)を経由せず、「管理番号」列がそのまま自社の受注番号
+ *   そのものになっている(2026-08-26判明: 太幸側でAR/売上計上に使う受注番号を、西濃側が
+ *   請求データにそのまま印字して返してくれる形式のため)。そのため管理番号を直接
+ *   orderNoとして使い、実費は「運賃合計」列を使う。管理番号が空欄の行(特定の送り状に
+ *   紐づかない燃料サーチャージ等の集計行、お問合せ番号が"999"始まり)は対象外とする。
  *
- * ファイル形式は、ヘッダー行に「原票No」を含むか「原票番号」を含むかで自動判別する。
+ * ファイル形式は、ヘッダー行に「管理番号」を含むか「原票No」を含むか「原票番号」を
+ * 含むかで自動判別する。
  */
 
-type Carrier = "西濃運輸" | "福山通運";
+type Carrier = "西濃運輸" | "福山通運" | "西濃運輸(東京本社)";
 
 type InvoiceLine = {
   carrier: Carrier;
@@ -63,6 +72,9 @@ type InvoiceLine = {
   destinationName: string;
   note: string;
   sourceFile: string;
+  // 西濃運輸(東京本社)のみ設定される。設定されている場合、送り状番号↔受注番号の
+  // 対応表(shipping_note_mapping)を経由せず、この値をそのまま受注番号として使う。
+  directOrderNo?: string;
 };
 
 type MatchStatus = "matched" | "no_mapping" | "no_freight_charge" | "no_sales_data";
@@ -122,6 +134,7 @@ function cell(cols: string[], i: number): string {
 
 function detectCarrier(headerCols: string[]): Carrier | null {
   const joined = headerCols.join(",");
+  if (joined.includes("管理番号") && joined.includes("運賃合計")) return "西濃運輸(東京本社)";
   if (joined.includes("原票No")) return "西濃運輸";
   if (joined.includes("原票番号")) return "福山通運";
   return null;
@@ -169,6 +182,34 @@ function parseFukuyamaRows(rows: string[][], fileName: string): InvoiceLine[] {
     out.push({
       carrier: "福山通運",
       waybillNo,
+      dateLabel,
+      amount,
+      destinationName,
+      note,
+      sourceFile: fileName,
+    });
+  }
+  return out;
+}
+
+// 西濃運輸(東京本社)形式: 列番号(0始まり)は固定のヘッダー構成に基づく。
+// 9=受付年月日, 12=お問合せ番号, 13=お届け先名称１, 26=運賃合計, 27=備考, 43=管理番号。
+function parseSeinoTokyoRows(rows: string[][], fileName: string): InvoiceLine[] {
+  const out: InvoiceLine[] = [];
+  for (const cols of rows) {
+    const orderNo = cell(cols, 43);
+    // 管理番号が空欄の行(燃料サーチャージ等の集計行、特定の送り状に紐づかない)は対象外。
+    if (!orderNo) continue;
+    const inquiryNo = cell(cols, 12);
+    const dateRaw = cell(cols, 9); // YYYYMMDD
+    const dateLabel = /^\d{8}$/.test(dateRaw) ? `${dateRaw.slice(0, 4)}/${dateRaw.slice(4, 6)}/${dateRaw.slice(6, 8)}` : dateRaw;
+    const amount = Number(cell(cols, 26).replace(/,/g, "")) || 0;
+    const destinationName = cell(cols, 13);
+    const note = cell(cols, 27);
+    out.push({
+      carrier: "西濃運輸(東京本社)",
+      waybillNo: inquiryNo || orderNo,
+      directOrderNo: orderNo,
       dateLabel,
       amount,
       destinationName,
@@ -252,12 +293,17 @@ export default function FreightCheck({
         const carrier = detectCarrier(header);
         if (!carrier) {
           errors.push(
-            `${file.name}: ファイル形式を判別できませんでした(西濃運輸・福山通運のどちらの請求データ形式にも一致しません)。`
+            `${file.name}: ファイル形式を判別できませんでした(西濃運輸・西濃運輸(東京本社)・福山通運のいずれの請求データ形式にも一致しません)。`
           );
           continue;
         }
         const dataRows = rows.slice(1);
-        const lines = carrier === "西濃運輸" ? parseSeinoRows(dataRows, file.name) : parseFukuyamaRows(dataRows, file.name);
+        const lines =
+          carrier === "西濃運輸"
+            ? parseSeinoRows(dataRows, file.name)
+            : carrier === "福山通運"
+            ? parseFukuyamaRows(dataRows, file.name)
+            : parseSeinoTokyoRows(dataRows, file.name);
         allLines.push(...lines);
       } catch (e) {
         errors.push(`${file.name}: 読み込みエラー: ${String(e)}`);
@@ -270,8 +316,10 @@ export default function FreightCheck({
 
   const results: ResultRow[] = useMemo(() => {
     return invoiceLines.map((line, i) => {
+      // 西濃運輸(東京本社)は送り状番号↔受注番号の対応表を経由せず、管理番号を
+      // そのまま受注番号として使う(directOrderNoが設定されている場合はそちら優先)。
       const mapRow = mappingByWaybill.get(line.waybillNo);
-      const orderNo = mapRow?.order_no ?? null;
+      const orderNo = line.directOrderNo ?? mapRow?.order_no ?? null;
       let status: MatchStatus;
       let chargedFreight: number | null = null;
       let assumedCost: number | null = null;
@@ -438,7 +486,7 @@ export default function FreightCheck({
     <div className="page">
       <h1>運賃照合</h1>
       <p className="subtitle">
-        西濃運輸・福山通運の請求データ(実費運賃)を、事前に取り込んだ送り状番号↔受注番号の対応表(shipping_note_mapping)経由で自社の受注に変換し、得意先への運賃請求額(sales_linesの商品コード「99」運賃行)と突き合わせて、運賃で利益が取れているかを一覧にします。請求データはこの場で読み込むだけでSupabaseには保存されません。
+        西濃運輸・福山通運の請求データ(実費運賃)を、事前に取り込んだ送り状番号↔受注番号の対応表(shipping_note_mapping)経由で自社の受注に変換し、得意先への運賃請求額(sales_linesの商品コード「99」運賃行)と突き合わせて、運賃で利益が取れているかを一覧にします(西濃運輸(東京本社)形式のみ、対応表を使わず「管理番号」列を受注番号として直接使います)。請求データはこの場で読み込むだけでSupabaseには保存されません。
       </p>
 
       <div className="card" style={{ marginBottom: 20 }}>
@@ -497,7 +545,7 @@ export default function FreightCheck({
       >
         <h2 style={{ marginTop: 0 }}>② 運送会社の請求データ</h2>
         <p className="subtitle" style={{ margin: "0 0 12px" }}>
-          西濃運輸・福山通運どちらの請求CSVもドラッグ&ドロップまたは選択できます(ヘッダー行から自動判別)。複数ファイルをまとめて選択可能です。
+          西濃運輸・西濃運輸(東京本社)・福山通運いずれの請求CSVもドラッグ&ドロップまたは選択できます(ヘッダー行から自動判別)。複数ファイルをまとめて選択可能です。
         </p>
         <label
           style={{
