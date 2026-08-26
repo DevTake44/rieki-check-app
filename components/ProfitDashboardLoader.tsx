@@ -12,25 +12,67 @@ import type { ProfitOrder } from "@/lib/types";
 const CHUNK_SIZE = 3000;
 const CONCURRENCY = 4;
 
+// 2026-08-18判明: 1リクエストがタイムアウトなく無応答のまま固まると、
+// Promise.allで待っているバッチ全体が永遠に止まってしまい、エラーも出ずに
+// 「読み込み中… 13,000 / 88,481 件」のまま進まなくなる不具合があった。
+// これを防ぐため、リクエストごとにタイムアウトと再試行を設ける。
+const REQUEST_TIMEOUT_MS = 20000;
+const MAX_RETRIES = 3;
+
 type ChunkResponse = {
   rows: ProfitOrder[];
-  total: number;
+  total: number | null;
   offset: number;
   hasMore: boolean;
   error?: string;
 };
 
-async function fetchChunk(offset: number): Promise<ChunkResponse> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchChunkOnce(offset: number): Promise<ChunkResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`/api/profit-orders?offset=${offset}&limit=${CHUNK_SIZE}`, { cache: "no-store" });
+    const res = await fetch(`/api/profit-orders?offset=${offset}&limit=${CHUNK_SIZE}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { rows: [], total: 0, offset, hasMore: false, error: json.error ?? res.statusText ?? "不明なエラー" };
+      return {
+        rows: [],
+        total: null,
+        offset,
+        hasMore: false,
+        error: json.error ?? res.statusText ?? "不明なエラー",
+      };
     }
     return json as ChunkResponse;
   } catch (e) {
-    return { rows: [], total: 0, offset, hasMore: false, error: String(e) };
+    const message =
+      e instanceof DOMException && e.name === "AbortError"
+        ? `タイムアウトしました(${REQUEST_TIMEOUT_MS / 1000}秒応答なし)`
+        : String(e);
+    return { rows: [], total: null, offset, hasMore: false, error: message };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function fetchChunk(offset: number): Promise<ChunkResponse> {
+  let last: ChunkResponse = { rows: [], total: null, offset, hasMore: false, error: "不明なエラー" };
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const result = await fetchChunkOnce(offset);
+    if (!result.error) return result;
+    last = result;
+    if (attempt < MAX_RETRIES) {
+      // 単純な再試行だと同じ理由で失敗し続けることがあるため、少し間隔をあける
+      await sleep(1000 * (attempt + 1));
+    }
+  }
+  return { ...last, error: `${last.error}(${MAX_RETRIES + 1}回試行しても失敗)` };
 }
 
 export default function ProfitDashboardLoader() {
@@ -50,17 +92,18 @@ export default function ProfitDashboardLoader() {
     (async () => {
       const first = await fetchChunk(0);
       if (cancelled) return;
-      if (first.error) {
-        setError(first.error);
+      if (first.error || first.total === null) {
+        setError(first.error ?? "件数の取得に失敗しました");
         return;
       }
 
       const collected: ProfitOrder[] = [...first.rows];
-      setTotal(first.total);
+      const firstTotal = first.total;
+      setTotal(firstTotal);
       setLoadedCount(collected.length);
 
       const remainingOffsets: number[] = [];
-      for (let o = first.rows.length; o < first.total; o += CHUNK_SIZE) {
+      for (let o = first.rows.length; o < firstTotal; o += CHUNK_SIZE) {
         remainingOffsets.push(o);
       }
 
@@ -91,7 +134,7 @@ export default function ProfitDashboardLoader() {
       <div className="page">
         <h1>売上利益</h1>
         <div className="card">
-          <p>データの取得に失敗しました。</p>
+          <p>データの取得に失敗しました。時間をおいてページを再読み込みしてください。</p>
           <pre style={{ whiteSpace: "pre-wrap", color: "#c0392b" }}>{error}</pre>
         </div>
       </div>

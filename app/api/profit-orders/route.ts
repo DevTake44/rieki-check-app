@@ -27,8 +27,16 @@ export async function GET(req: NextRequest) {
 
   const supabase = getSupabaseServerClient();
 
-  const [{ count, error: countError }, { data, error }] = await Promise.all([
-    supabase.from("v_profit_by_order").select("*", { count: "exact", head: true }),
+  // 件数(count)は先頭(offset=0)のリクエストでだけ取得する。全チャンクで毎回
+  // count(exact)を取り直すと、DBへの同時接続数が倍になり(2026-08-18判明: これが
+  // 原因で読み込みが13,000件あたりで止まって見える不具合が発生した)、
+  // ブラウザ側は最初のレスポンスで受け取ったtotalを覚えておけば十分なため。
+  const needCount = offset === 0;
+
+  const [countResult, { data, error }] = await Promise.all([
+    needCount
+      ? supabase.from("v_profit_by_order").select("*", { count: "exact", head: true })
+      : Promise.resolve({ count: null, error: null }),
     supabase
       .from("v_profit_by_order")
       .select("*")
@@ -36,21 +44,21 @@ export async function GET(req: NextRequest) {
       .range(offset, offset + limit - 1),
   ]);
 
-  if (countError) {
-    return NextResponse.json({ error: countError.message }, { status: 500 });
+  if (countResult.error) {
+    return NextResponse.json({ error: countResult.error.message }, { status: 500 });
   }
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   const rows = (data ?? []) as ProfitOrder[];
-  const total = count ?? 0;
+  const total = countResult.count ?? null;
 
   return NextResponse.json({
     rows,
     total,
     offset,
     limit,
-    hasMore: offset + rows.length < total,
+    hasMore: total !== null ? offset + rows.length < total : rows.length === limit,
   });
 }
