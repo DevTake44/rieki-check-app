@@ -194,13 +194,21 @@ function parseFukuyamaRows(rows: string[][], fileName: string): InvoiceLine[] {
 
 // 西濃運輸(東京本社)形式: 列番号(0始まり)は固定のヘッダー構成に基づく。
 // 9=受付年月日, 12=お問合せ番号, 13=お届け先名称１, 26=運賃合計, 27=備考, 43=管理番号。
+//
+// 2026-08-26修正: 当初は「管理番号(43列目)が空欄の行は除外」としていたが、これだと
+// お届け先名称や金額など実際の請求データが入っている行(＝管理番号を書き忘れている
+// だけの実在の運賃)まで結果から消えてしまい、その分の実費が集計から漏れる不具合が
+// あった(例: お問合せ番号2232440872、㈱三橋商事宛、450円の行が結果に出ない、として
+// 報告された)。正しくは「お問合せ番号(12列目)が空欄の行」だけが、特定の送り状に紐づかない
+// 燃料サーチャージ等の集計行にあたるので、そちらを除外基準にする。管理番号が空欄でも
+// お問合せ番号がある行は結果に含め、受注番号は不明("対応する受注が見つからない")として
+// 扱う(＝他の運送会社の「送り状番号はあるが対応表に無い」パターンと同じ)。
 function parseSeinoTokyoRows(rows: string[][], fileName: string): InvoiceLine[] {
   const out: InvoiceLine[] = [];
   for (const cols of rows) {
-    const orderNo = cell(cols, 43);
-    // 管理番号が空欄の行(燃料サーチャージ等の集計行、特定の送り状に紐づかない)は対象外。
-    if (!orderNo) continue;
     const inquiryNo = cell(cols, 12);
+    if (!inquiryNo) continue; // お問合せ番号すら無い行(特定の送り状に紐づかない集計行)は対象外
+    const orderNo = cell(cols, 43); // 管理番号。空欄のこともあり、その場合は受注番号不明として扱う
     const dateRaw = cell(cols, 9); // YYYYMMDD
     const dateLabel = /^\d{8}$/.test(dateRaw) ? `${dateRaw.slice(0, 4)}/${dateRaw.slice(4, 6)}/${dateRaw.slice(6, 8)}` : dateRaw;
     const amount = Number(cell(cols, 26).replace(/,/g, "")) || 0;
@@ -208,8 +216,8 @@ function parseSeinoTokyoRows(rows: string[][], fileName: string): InvoiceLine[] 
     const note = cell(cols, 27);
     out.push({
       carrier: "西濃運輸(東京本社)",
-      waybillNo: inquiryNo || orderNo,
-      directOrderNo: orderNo,
+      waybillNo: inquiryNo,
+      directOrderNo: orderNo || undefined,
       dateLabel,
       amount,
       destinationName,
@@ -440,7 +448,6 @@ export default function FreightCheck({
       "売上番号(納品書番号)",
       "実費運賃",
       "得意先への請求運賃",
-      "見込み原価",
       "利益(請求-実費)",
       "状態",
     ];
@@ -464,7 +471,6 @@ export default function FreightCheck({
           r.deliveryNoteNo ?? "",
           Math.round(r.actualFreight),
           r.chargedFreight !== null ? Math.round(r.chargedFreight) : "",
-          r.assumedCost !== null ? Math.round(r.assumedCost) : "",
           r.margin !== null ? Math.round(r.margin) : "",
           statusLabel[r.status],
         ]
