@@ -79,12 +79,28 @@ import Link from "next/link";
  * 番号の表/太幸側の署名)のCSVとしてダウンロードできるようにしている。この一覧・
  * ダウンロードは西濃運輸(東京本社)専用(他の2社の「対応する受注が見つからない」行は
  * 対象外、従来通り明細一覧・全体CSVの方で確認する)。
+ *
+ * ■ 2026-08-27追記: Excelで開いた時の見た目崩れ対策
+ * 上記CSVをExcelで開くと、「日付」列(2026/07/14のような文字列)が日付として、
+ * 「お問合せ番号」列(1797806829のような数字の並び)が数値として自動認識されてしまい、
+ * 列幅が足りないと「#######」やE+09のような指数表記で表示され、そのままではFAXに
+ * 使えない不具合があった(実際の報告あり)。ライブラリを追加してのPDF化は、この
+ * セッションで一度GitHubへのファイル混入からビルドを壊した経緯があるため慎重を期し、
+ * 新しい依存関係を増やさずに済むCSVの改良で対応する: 各セルの先頭に半角シングル
+ * クォート(')を付ける。これはExcelがCSVを読み込む際に「このセルは数値/日付ではなく
+ * 文字列として扱う」ことを示す標準的な合図で、クォート自体はセルには表示されない
+ * (メモ帳等プレーンテキストで見ると先頭に'が付いて見えるが、Excel上は見えない)。
+ * これにより列幅を毎回手で直さなくても崩れずに表示・印刷・FAXできる。
+ * あわせて、西濃運輸への送信先FAX番号(03-3522-6767)もシートに印字し、送る側が
+ * 毎回番号を調べずに済むようにしている。
  */
 
 type Carrier = "西濃運輸" | "福山通運" | "西濃運輸(東京本社)";
 
 // 西濃運輸(東京本社)への「送り状の控えFAX依頼」用紙の固定項目(2026-08-27追加、
 // ユーザー提供の実際の依頼用紙の記載内容そのまま)。FAX番号が変わった場合はここを直す。
+// SEND_NUMBER=西濃運輸側の受信FAX番号(ここに送る)、REPLY_NUMBER=太幸側の返信先FAX番号。
+const SEINO_TOKYO_FAX_SEND_NUMBER = "03-3522-6767";
 const SEINO_TOKYO_FAX_REPLY_NUMBER = "03-5444-2117";
 const SEINO_TOKYO_FAX_SENDER_LABEL = "㈱太幸　経理";
 const SEINO_TOKYO_FAX_SENDER_TEL = "03-6435-4440";
@@ -567,19 +583,28 @@ export default function FreightCheck({
   // FAXで取り寄せる依頼用紙(ユーザー提供の実物と同じ体裁)としてCSV出力する。
   // 日付・お問合せ番号の2列が西濃側に必要な項目(実物の依頼用紙と同じ並び)、
   // 得意先名・配達場所は太幸側で照合しやすいように付け足した参考情報。
+  // 日付・お問合せ番号セルの先頭に半角シングルクォート(')を付けているのは、Excelが
+  // これらを日付/数値として自動認識して「#######」やE+09表記になってしまう不具合の
+  // 対策(上部JSDocコメント参照)。文字列として強制的に扱わせるための合図で、
+  // Excel上では表示されない。
+  function forceExcelText(v: string): string {
+    return `'${v}`;
+  }
+
   function downloadFaxRequestCsv() {
     const targets = seinoTokyoUnknown.filter((r) => selectedFaxKeys.has(r.key));
     if (targets.length === 0) return;
 
     const lines: string[] = [];
     lines.push(csvEscape("西濃運輸㈱御中"));
+    lines.push(csvEscape(`送信先FAX:${SEINO_TOKYO_FAX_SEND_NUMBER}`));
     lines.push(csvEscape("いつもお世話になります。送り状の控えのFAXお願いします。"));
     lines.push(csvEscape(`返信先FAX:${SEINO_TOKYO_FAX_REPLY_NUMBER}`));
     lines.push("");
     lines.push(["日付", "お問合せ番号", "得意先名(参考)", "配達場所(参考)"].map(csvEscape).join(","));
     for (const r of targets) {
       lines.push(
-        [r.dateLabel, r.waybillNo, r.customerName ?? "", r.deliveryLocation]
+        [forceExcelText(r.dateLabel), forceExcelText(r.waybillNo), r.customerName ?? "", r.deliveryLocation]
           .map(csvEscape)
           .join(",")
       );
