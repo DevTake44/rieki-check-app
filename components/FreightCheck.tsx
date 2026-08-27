@@ -80,19 +80,27 @@ import Link from "next/link";
  * ダウンロードは西濃運輸(東京本社)専用(他の2社の「対応する受注が見つからない」行は
  * 対象外、従来通り明細一覧・全体CSVの方で確認する)。
  *
- * ■ 2026-08-27追記: Excelで開いた時の見た目崩れ対策
+ * ■ 2026-08-27追記(1): Excelで開いた時の見た目崩れ対策(CSV版、後に(2)で置き換え)
  * 上記CSVをExcelで開くと、「日付」列(2026/07/14のような文字列)が日付として、
  * 「お問合せ番号」列(1797806829のような数字の並び)が数値として自動認識されてしまい、
  * 列幅が足りないと「#######」やE+09のような指数表記で表示され、そのままではFAXに
- * 使えない不具合があった(実際の報告あり)。ライブラリを追加してのPDF化は、この
- * セッションで一度GitHubへのファイル混入からビルドを壊した経緯があるため慎重を期し、
- * 新しい依存関係を増やさずに済むCSVの改良で対応する: 各セルの先頭に半角シングル
- * クォート(')を付ける。これはExcelがCSVを読み込む際に「このセルは数値/日付ではなく
- * 文字列として扱う」ことを示す標準的な合図で、クォート自体はセルには表示されない
- * (メモ帳等プレーンテキストで見ると先頭に'が付いて見えるが、Excel上は見えない)。
- * これにより列幅を毎回手で直さなくても崩れずに表示・印刷・FAXできる。
- * あわせて、西濃運輸への送信先FAX番号(03-3522-6767)もシートに印字し、送る側が
- * 毎回番号を調べずに済むようにしている。
+ * 使えない不具合があった(実際の報告あり)。最初は新しい依存関係を増やさずに、各セルの
+ * 先頭に半角シングルクォート(')を付けてExcelに文字列として認識させるCSVの改良で
+ * 対応した。
+ *
+ * ■ 2026-08-27追記(2): 本物のxlsxファイルを生成する方式に変更
+ * (1)の対策後も、「列幅が安定しない(Excel側の自動調整に左右される)」「文字サイズを
+ * 指定したい」という要望があった。CSVはファイル形式そのものに列幅・フォントサイズ・
+ * 罫線などの情報を持てない(Excelが開くたびに独自に解釈するしかない)ため、CSVの
+ * 改良では原理的に解決できない。そのため、ユーザーが実際に手動で列幅・フォント
+ * サイズ・罫線を整えて送ってくれたサンプル(西濃東京_送り状控えFAX依頼_20260827.xlsx)
+ * と全く同じレイアウトになるよう、ブラウザ上で本物のxlsxファイルを組み立てて
+ * ダウンロードする方式(exceljsライブラリ使用)に切り替えた。列幅(A:14.125/
+ * B:16.25/C:15.0/D:24.25)・フォント(游ゴシック、タイトルのみ16pt、他11pt)・
+ * 罫線(表部分のみ格子状の細線)は、そのサンプルの値をそのまま踏襲している。
+ * exceljsは今回新しく追加した依存パッケージ(package.json参照)で、この開発環境では
+ * npm installができないためローカルでのビルド検証ができていない。Vercel側のビルド
+ * ログでエラーが出た場合はスクリーンショットを共有してもらえれば対応する。
  */
 
 type Carrier = "西濃運輸" | "福山通運" | "西濃運輸(東京本社)";
@@ -580,47 +588,92 @@ export default function FreightCheck({
   }
 
   // 2026-08-27追加: チェックした「受注番号不明」行を、西濃運輸へ送り状の控えを
-  // FAXで取り寄せる依頼用紙(ユーザー提供の実物と同じ体裁)としてCSV出力する。
-  // 日付・お問合せ番号の2列が西濃側に必要な項目(実物の依頼用紙と同じ並び)、
-  // 得意先名・配達場所は太幸側で照合しやすいように付け足した参考情報。
-  // 日付・お問合せ番号セルの先頭に半角シングルクォート(')を付けているのは、Excelが
-  // これらを日付/数値として自動認識して「#######」やE+09表記になってしまう不具合の
-  // 対策(上部JSDocコメント参照)。文字列として強制的に扱わせるための合図で、
-  // Excel上では表示されない。
-  function forceExcelText(v: string): string {
-    return `'${v}`;
-  }
+  // FAXで取り寄せる依頼用紙として、本物のxlsxファイル(列幅・フォントサイズ・罫線を
+  // 固定)で出力する。レイアウトは、ユーザーが手動で整えてくれたサンプル
+  // (西濃東京_送り状控えFAX依頼_20260827.xlsx)と同じ値をそのまま使っている。
+  // exceljsは動的import(必要になった時だけ読み込む)にして、通常の画面表示では
+  // 読み込まれないようにしている。
+  const [faxExportError, setFaxExportError] = useState<string | null>(null);
+  const [faxExporting, setFaxExporting] = useState(false);
 
-  function downloadFaxRequestCsv() {
+  async function downloadFaxRequestXlsx() {
     const targets = seinoTokyoUnknown.filter((r) => selectedFaxKeys.has(r.key));
     if (targets.length === 0) return;
 
-    const lines: string[] = [];
-    lines.push(csvEscape("西濃運輸㈱御中"));
-    lines.push(csvEscape(`送信先FAX:${SEINO_TOKYO_FAX_SEND_NUMBER}`));
-    lines.push(csvEscape("いつもお世話になります。送り状の控えのFAXお願いします。"));
-    lines.push(csvEscape(`返信先FAX:${SEINO_TOKYO_FAX_REPLY_NUMBER}`));
-    lines.push("");
-    lines.push(["日付", "お問合せ番号", "得意先名(参考)", "配達場所(参考)"].map(csvEscape).join(","));
-    for (const r of targets) {
-      lines.push(
-        [forceExcelText(r.dateLabel), forceExcelText(r.waybillNo), r.customerName ?? "", r.deliveryLocation]
-          .map(csvEscape)
-          .join(",")
-      );
-    }
-    lines.push("");
-    lines.push(csvEscape(SEINO_TOKYO_FAX_SENDER_LABEL));
-    lines.push(csvEscape(`TEL:${SEINO_TOKYO_FAX_SENDER_TEL}`));
+    setFaxExporting(true);
+    setFaxExportError(null);
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("FAX依頼");
 
-    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    a.download = `西濃東京_送り状控えFAX依頼_${today}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+      // サンプル(西濃東京_送り状控えFAX依頼_20260827.xlsx)と同じ列幅。
+      sheet.columns = [{ width: 14.125 }, { width: 16.25 }, { width: 15.0 }, { width: 24.25 }];
+
+      const FONT_NAME = "游ゴシック";
+      const thinBorder = { style: "thin" as const };
+      const centerAlign = { horizontal: "center" as const, vertical: "middle" as const };
+
+      sheet.getRow(1).height = 25.5;
+      const titleCell = sheet.getCell("B1");
+      titleCell.value = "西濃運輸㈱  御中";
+      titleCell.font = { name: FONT_NAME, size: 16 };
+      titleCell.alignment = { vertical: "middle" };
+      titleCell.border = { bottom: thinBorder };
+
+      function setPlainText(addr: string, text: string) {
+        const cell = sheet.getCell(addr);
+        cell.value = text;
+        cell.font = { name: FONT_NAME, size: 11 };
+      }
+
+      setPlainText("D2", `送信先FAX:${SEINO_TOKYO_FAX_SEND_NUMBER}`);
+      setPlainText("A3", "いつもお世話になります。");
+      setPlainText("A4", "下記問い合わせ番号の送り状の控えをFAXお願いします。");
+      setPlainText("A5", `返信先FAX:${SEINO_TOKYO_FAX_REPLY_NUMBER}`);
+
+      const headerRow = 8;
+      const headers = ["日付", "お問合せ番号", "得意先名(参考)", "配達場所(参考)"];
+      headers.forEach((h, i) => {
+        const cell = sheet.getCell(headerRow, i + 1);
+        cell.value = h;
+        cell.font = { name: FONT_NAME, size: 11 };
+        cell.alignment = centerAlign;
+        cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
+      });
+
+      targets.forEach((r, idx) => {
+        const rowNum = headerRow + 1 + idx;
+        const values = [r.dateLabel, r.waybillNo, r.customerName ?? "", r.deliveryLocation];
+        values.forEach((v, colIdx) => {
+          const cell = sheet.getCell(rowNum, colIdx + 1);
+          cell.value = v;
+          cell.font = { name: FONT_NAME, size: 11 };
+          cell.alignment = centerAlign;
+          cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
+        });
+      });
+
+      const footerRow1 = headerRow + targets.length + 3;
+      setPlainText(`A${footerRow1}`, SEINO_TOKYO_FAX_SENDER_LABEL);
+      setPlainText(`A${footerRow1 + 1}`, `TEL:${SEINO_TOKYO_FAX_SENDER_TEL}`);
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      a.download = `西濃東京_送り状控えFAX依頼_${today}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setFaxExportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFaxExporting(false);
+    }
   }
 
   return (
@@ -822,14 +875,25 @@ export default function FreightCheck({
                   <button className="ghost-btn" onClick={clearFaxKeys}>
                     選択解除
                   </button>
-                  <button className="ghost-btn" onClick={downloadFaxRequestCsv} disabled={selectedFaxKeys.size === 0}>
-                    選択した{selectedFaxKeys.size}件を西濃FAX依頼用CSVで出力
+                  <button
+                    className="ghost-btn"
+                    onClick={downloadFaxRequestXlsx}
+                    disabled={selectedFaxKeys.size === 0 || faxExporting}
+                  >
+                    {faxExporting
+                      ? "作成中…"
+                      : `選択した${selectedFaxKeys.size}件を西濃FAX依頼用Excelで出力`}
                   </button>
                 </div>
               </div>
               <p className="subtitle" style={{ margin: "0 0 8px" }}>
-                管理番号(自社受注番号)が空欄で、売上データからは当てられない行です。チェックした行を、西濃運輸に送り状の控えをFAXで取り寄せる依頼用紙(CSV)として出力できます。
+                管理番号(自社受注番号)が空欄で、売上データからは当てられない行です。チェックした行を、西濃運輸に送り状の控えをFAXで取り寄せる依頼用紙(Excel、列幅・文字サイズ固定)として出力できます。
               </p>
+              {faxExportError && (
+                <p style={{ color: "var(--critical)", fontSize: 13, margin: "0 0 8px" }}>
+                  Excelの作成に失敗しました: {faxExportError}
+                </p>
+              )}
               <div className="table-scroll table-scroll-v">
                 <table>
                   <thead>
