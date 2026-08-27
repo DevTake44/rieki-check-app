@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ProfitDashboard from "./ProfitDashboard";
 import type { ProfitOrder } from "@/lib/types";
+import { getProfitCache, setProfitCache } from "@/lib/profit-cache";
 
 // v_profit_by_order の全件(8万8千件超、2026-08時点)をサーバー側で1回のレスポンスに
 // 詰めるとJSONで約30MBになり、Vercel Functionsのレスポンスサイズ上限(4.5MB)を超えて
@@ -83,108 +84,166 @@ async function fetchChunk(offset: number, limit: number): Promise<ChunkResponse>
   return { ...last, error: `${last.error}(${MAX_RETRIES + 1}回試行しても失敗)` };
 }
 
+function fmtDateTime(ms: number): string {
+  const dt = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${dt.getFullYear()}/${pad(dt.getMonth() + 1)}/${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(
+    dt.getMinutes()
+  )}`;
+}
+
 export default function ProfitDashboardLoader() {
+  // orders: 実際に画面に表示するデータ。キャッシュ由来か、読み込み直後のものかを問わない。
   const [orders, setOrders] = useState<ProfitOrder[] | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  // 初回読み込み(まだ orders が無い状態)専用の進捗・エラー
   const [loadedCount, setLoadedCount] = useState(0);
   const [total, setTotal] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [initialError, setInitialError] = useState<string | null>(null);
+
+  // 手動更新(既に orders があり、裏で読み直している状態)専用の進捗・エラー。
+  // 更新中も古いデータを表示し続けたいので、初回読み込みの状態とは分けている。
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
   const startedRef = useRef(false);
+  const cancelledRef = useRef(false);
+
+  async function runLoad(isRefresh: boolean) {
+    if (isRefresh) {
+      setRefreshing(true);
+      setRefreshError(null);
+    } else {
+      setLoadedCount(0);
+      setTotal(null);
+      setInitialError(null);
+    }
+
+    const fail = (message: string) => {
+      if (isRefresh) {
+        setRefreshError(message);
+        setRefreshing(false);
+      } else {
+        setInitialError(message);
+      }
+    };
+
+    const first = await fetchChunk(0, REQUESTED_CHUNK_SIZE);
+    if (cancelledRef.current) return;
+    if (first.error || first.total === null) {
+      fail(first.error ?? "件数の取得に失敗しました");
+      return;
+    }
+
+    const firstTotal = first.total;
+    // サーバーが実際に1回で返してくる件数(要求した件数より少ないことがある)。
+    // これを基準にoffsetを進めることで、読み飛ばしを防ぐ。
+    const actualPageSize = first.rows.length;
+
+    const collected: ProfitOrder[] = [...first.rows];
+    if (!isRefresh) {
+      setTotal(firstTotal);
+      setLoadedCount(collected.length);
+    }
+
+    if (actualPageSize > 0 && collected.length < firstTotal) {
+      const remainingOffsets: number[] = [];
+      for (let o = actualPageSize; o < firstTotal; o += actualPageSize) {
+        remainingOffsets.push(o);
+      }
+
+      for (let i = 0; i < remainingOffsets.length; i += CONCURRENCY) {
+        const batch = remainingOffsets.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(batch.map((o) => fetchChunk(o, REQUESTED_CHUNK_SIZE)));
+        if (cancelledRef.current) return;
+        for (const r of results) {
+          if (r.error) {
+            fail(r.error);
+            return;
+          }
+          collected.push(...r.rows);
+        }
+        if (!isRefresh) setLoadedCount(collected.length);
+      }
+    }
+
+    // 念のための最終確認: 実際に返ってきたページサイズが途中で変わっていた場合などに
+    // 備えて、集計後に合計件数が一致するか検証し、足りなければ不足分を追加取得する。
+    let gapFillRounds = 0;
+    while (collected.length < firstTotal && gapFillRounds < MAX_GAP_FILL_ROUNDS) {
+      if (cancelledRef.current) return;
+      const r = await fetchChunk(collected.length, REQUESTED_CHUNK_SIZE);
+      if (r.error) {
+        fail(r.error);
+        return;
+      }
+      if (r.rows.length === 0) break; // これ以上取得できない(異常系)
+      collected.push(...r.rows);
+      if (!isRefresh) setLoadedCount(collected.length);
+      gapFillRounds++;
+    }
+
+    if (cancelledRef.current) return;
+
+    if (collected.length !== firstTotal) {
+      fail(
+        `件数が一致しませんでした(取得: ${collected.length.toLocaleString(
+          "ja-JP"
+        )}件 / 本来: ${firstTotal.toLocaleString("ja-JP")}件)。もう一度お試しください。それでも解消しない場合は開発者に連絡してください。`
+      );
+      return;
+    }
+
+    // 2026-08-27追加: 読み込み終わったデータをブラウザ内(モジュール変数)にキャッシュしておく。
+    // これにより、メニューに戻ってから再度この画面を開いたとき(next/linkでの画面遷移である限り)、
+    // 再取得せずに即座に表示できる。ブラウザを完全に再読み込みした場合は失われ、通常通り読み直す。
+    setProfitCache(collected);
+    setOrders(collected);
+    setLoadedAt(Date.now());
+    if (isRefresh) setRefreshing(false);
+  }
 
   useEffect(() => {
     // React 18 Strict Mode(開発時)のuseEffect二重実行で二重取得しないようにする
-    if (startedRef.current) return;
-    startedRef.current = true;
+    if (!startedRef.current) {
+      startedRef.current = true;
 
-    let cancelled = false;
-
-    (async () => {
-      const first = await fetchChunk(0, REQUESTED_CHUNK_SIZE);
-      if (cancelled) return;
-      if (first.error || first.total === null) {
-        setError(first.error ?? "件数の取得に失敗しました");
-        return;
+      const cached = getProfitCache();
+      if (cached) {
+        setOrders(cached.orders);
+        setLoadedAt(cached.loadedAt);
+      } else {
+        runLoad(false);
       }
-
-      const firstTotal = first.total;
-      // サーバーが実際に1回で返してくる件数(要求した件数より少ないことがある)。
-      // これを基準にoffsetを進めることで、読み飛ばしを防ぐ。
-      const actualPageSize = first.rows.length;
-
-      const collected: ProfitOrder[] = [...first.rows];
-      setTotal(firstTotal);
-      setLoadedCount(collected.length);
-
-      if (actualPageSize > 0 && collected.length < firstTotal) {
-        const remainingOffsets: number[] = [];
-        for (let o = actualPageSize; o < firstTotal; o += actualPageSize) {
-          remainingOffsets.push(o);
-        }
-
-        for (let i = 0; i < remainingOffsets.length; i += CONCURRENCY) {
-          const batch = remainingOffsets.slice(i, i + CONCURRENCY);
-          const results = await Promise.all(batch.map((o) => fetchChunk(o, REQUESTED_CHUNK_SIZE)));
-          if (cancelled) return;
-          for (const r of results) {
-            if (r.error) {
-              setError(r.error);
-              return;
-            }
-            collected.push(...r.rows);
-          }
-          setLoadedCount(collected.length);
-        }
-      }
-
-      // 念のための最終確認: 実際に返ってきたページサイズが途中で変わっていた場合などに
-      // 備えて、集計後に合計件数が一致するか検証し、足りなければ不足分を追加取得する。
-      let gapFillRounds = 0;
-      while (collected.length < firstTotal && gapFillRounds < MAX_GAP_FILL_ROUNDS) {
-        if (cancelled) return;
-        const r = await fetchChunk(collected.length, REQUESTED_CHUNK_SIZE);
-        if (r.error) {
-          setError(r.error);
-          return;
-        }
-        if (r.rows.length === 0) break; // これ以上取得できない(異常系)
-        collected.push(...r.rows);
-        setLoadedCount(collected.length);
-        gapFillRounds++;
-      }
-
-      if (cancelled) return;
-
-      if (collected.length !== firstTotal) {
-        setError(
-          `件数が一致しませんでした(取得: ${collected.length.toLocaleString(
-            "ja-JP"
-          )}件 / 本来: ${firstTotal.toLocaleString(
-            "ja-JP"
-          )}件)。ページを再読み込みしてください。それでも解消しない場合は開発者に連絡してください。`
-        );
-        return;
-      }
-
-      setOrders(collected);
-    })();
+    }
 
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (error) {
-    return (
-      <div className="page">
-        <h1>売上利益</h1>
-        <div className="card">
-          <p>データの取得に失敗しました。時間をおいてページを再読み込みしてください。</p>
-          <pre style={{ whiteSpace: "pre-wrap", color: "#c0392b" }}>{error}</pre>
-        </div>
-      </div>
-    );
-  }
-
   if (!orders) {
+    if (initialError) {
+      return (
+        <div className="page">
+          <h1>売上利益</h1>
+          <div className="card">
+            <p>データの取得に失敗しました。</p>
+            <pre style={{ whiteSpace: "pre-wrap", color: "#c0392b" }}>{initialError}</pre>
+            <button
+              className="ghost-btn"
+              style={{ marginTop: 12 }}
+              onClick={() => runLoad(false)}
+            >
+              もう一度読み込む
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="page">
         <h1>売上利益</h1>
@@ -198,5 +257,34 @@ export default function ProfitDashboardLoader() {
     );
   }
 
-  return <ProfitDashboard orders={orders} />;
+  const statusBar = (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        flexWrap: "wrap",
+        margin: "0 0 8px",
+      }}
+    >
+      <span className="cell-sub">
+        最終読み込み: {loadedAt !== null ? fmtDateTime(loadedAt) : "―"}
+        {refreshing && (
+          <>
+            {" "}
+            (更新中… {loadedCount.toLocaleString("ja-JP")}
+            {total !== null ? ` / ${total.toLocaleString("ja-JP")}` : ""} 件)
+          </>
+        )}
+      </span>
+      <button className="ghost-btn" onClick={() => runLoad(true)} disabled={refreshing}>
+        {refreshing ? "更新中…" : "更新"}
+      </button>
+      {refreshError && (
+        <span style={{ color: "#c0392b", fontSize: 12.5 }}>更新に失敗しました: {refreshError}</span>
+      )}
+    </div>
+  );
+
+  return <ProfitDashboard orders={orders} headerExtra={statusBar} />;
 }

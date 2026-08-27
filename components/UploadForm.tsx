@@ -5,6 +5,7 @@ import Papa from "papaparse";
 import { mapSalesRow, mapPurchaseRow, mapTransferRow, mapShippingNoteRow } from "@/lib/row-mapping";
 import type { SalesRowInsert, PurchaseRowInsert, TransferRowInsert, ShippingNoteRowInsert } from "@/lib/row-mapping";
 import Link from "next/link";
+import { clearProfitCache } from "@/lib/profit-cache";
 
 type Kind = "sales" | "purchase" | "transfer" | "shippingNote";
 
@@ -267,6 +268,14 @@ export default function UploadForm() {
         refreshed: !refreshError,
         errors: refreshError ? [...s.errors, `集計の更新に失敗しました: ${refreshError}`] : s.errors,
       }));
+      // 2026-08-27追加: 売上利益画面はブラウザ内にデータをキャッシュしているため、
+      // ここでアップロード(=データが変わった)が成功した以上、古いキャッシュを
+      // 残したままにすると更新前の数字が表示され続けてしまう。取り込んだデータの
+      // 反映を確実にするため、成功したらキャッシュを破棄し、次に売上利益を開いたときは
+      // 必ず最新データを読み直すようにする。
+      if (!refreshError) {
+        clearProfitCache();
+      }
     }
 
     setStatus((s) => ({ ...s, running: false, finished: true }));

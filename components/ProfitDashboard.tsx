@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { ProfitOrder } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
@@ -222,7 +223,16 @@ function matTotalCell(metric: MatMetric, row: MatRow) {
   );
 }
 
-export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
+export default function ProfitDashboard({
+  orders,
+  headerExtra,
+}: {
+  orders: ProfitOrder[];
+  // 2026-08-27追加: ブラウザ内キャッシュの「最終読み込み: HH:MM」表示と「更新」ボタンを
+  // ProfitDashboardLoader側から差し込むためのスロット。このコンポーネント自体は
+  // キャッシュの仕組みを知らなくてよいようにするため、任意のReactNodeを受け取るだけにしている。
+  headerExtra?: ReactNode;
+}) {
   const maxOrderDate = useMemo(() => {
     const dates = orders.map((o) => o.order_date).filter((d): d is string => !!d);
     return dates.length ? dates.reduce((a, b) => (a > b ? a : b)) : null;
@@ -671,6 +681,7 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
           </Link>
         </div>
       </div>
+      {headerExtra}
       <p className="subtitle">
         受注番号単位で集計した売上・原価・利益を、受注番号・得意先・物件・担当のいずれかの単位で切り替えて見られます。
         原価は、在庫区分は売上データの原価、メーカー直送・手配区分は仕入データとの受注番号・行番号一致による実績原価(見つからない場合は売上データの原価で代用)を使っています。
