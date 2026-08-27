@@ -67,9 +67,27 @@ import Link from "next/link";
  *
  * ファイル形式は、ヘッダー行に「管理番号」を含むか「原票No」を含むか「原票番号」を
  * 含むかで自動判別する。
+ *
+ * ■ 2026-08-27追加: 西濃運輸(東京本社)の「受注番号不明分」FAX依頼シート
+ * 西濃運輸(東京本社)は、請求データの「管理番号」列がそのまま自社の受注番号になる
+ * 形式だが、西濃側で管理番号の記入が漏れている行(＝status="no_mapping")は、
+ * こちらの売上データから当てようがない(お問合せ番号だけでは受注が特定できない)。
+ * このような行は、西濃運輸に直接FAXで送り状の控えを取り寄せて内容を確認するのが
+ * 従来からの運用(ユーザー提供の実際のFAX依頼用紙を参考に再現)。そのため、
+ * status="no_mapping"かつcarrier="西濃運輸(東京本社)"の行だけを別枠の一覧に出し、
+ * チェックした行を、その依頼用紙と同じ体裁(西濃運輸㈱御中/返信先FAX/日付・お問合せ
+ * 番号の表/太幸側の署名)のCSVとしてダウンロードできるようにしている。この一覧・
+ * ダウンロードは西濃運輸(東京本社)専用(他の2社の「対応する受注が見つからない」行は
+ * 対象外、従来通り明細一覧・全体CSVの方で確認する)。
  */
 
 type Carrier = "西濃運輸" | "福山通運" | "西濃運輸(東京本社)";
+
+// 西濃運輸(東京本社)への「送り状の控えFAX依頼」用紙の固定項目(2026-08-27追加、
+// ユーザー提供の実際の依頼用紙の記載内容そのまま)。FAX番号が変わった場合はここを直す。
+const SEINO_TOKYO_FAX_REPLY_NUMBER = "03-5444-2117";
+const SEINO_TOKYO_FAX_SENDER_LABEL = "㈱太幸　経理";
+const SEINO_TOKYO_FAX_SENDER_TEL = "03-6435-4440";
 
 type InvoiceLine = {
   carrier: Carrier;
@@ -262,6 +280,9 @@ export default function FreightCheck({
   const [invoiceLines, setInvoiceLines] = useState<InvoiceLine[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | MatchStatus>("all");
   const [dragOver, setDragOver] = useState(false);
+  // 2026-08-27追加: 西濃運輸(東京本社)の「受注番号不明分」一覧で、FAX依頼シートに
+  // 含めるためにチェックした行(ResultRow.key)の集合。
+  const [selectedFaxKeys, setSelectedFaxKeys] = useState<Set<string>>(new Set());
 
   const mappingByWaybill = useMemo(() => {
     const m = new Map<string, ShippingNoteMappingRow>();
@@ -340,6 +361,8 @@ export default function FreightCheck({
 
     setInvoiceLines(allLines);
     setFileState({ fileNames, loading: false, errors });
+    // 新しいファイルを読み込んだら、古いチェック状態は意味が無いのでリセットする。
+    setSelectedFaxKeys(new Set());
   }
 
   const results: ResultRow[] = useMemo(() => {
@@ -455,6 +478,31 @@ export default function FreightCheck({
     return results.filter((r) => r.status === statusFilter);
   }, [results, statusFilter]);
 
+  // 2026-08-27追加: 西濃運輸(東京本社)で受注番号が不明(管理番号が空欄で、
+  // お問合せ番号だけでは当てられない)行だけを抜き出す。この一覧から選んだ行を
+  // 西濃へのFAX依頼シートとして出力する。
+  const seinoTokyoUnknown = useMemo(
+    () => results.filter((r) => r.carrier === "西濃運輸(東京本社)" && r.status === "no_mapping"),
+    [results]
+  );
+
+  function toggleFaxKey(key: string) {
+    setSelectedFaxKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function selectAllFaxKeys() {
+    setSelectedFaxKeys(new Set(seinoTokyoUnknown.map((r) => r.key)));
+  }
+
+  function clearFaxKeys() {
+    setSelectedFaxKeys(new Set());
+  }
+
   function csvEscape(v: unknown): string {
     const s = v === null || v === undefined ? "" : String(v);
     if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
@@ -511,6 +559,41 @@ export default function FreightCheck({
     a.href = url;
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     a.download = `運賃照合_${today}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // 2026-08-27追加: チェックした「受注番号不明」行を、西濃運輸へ送り状の控えを
+  // FAXで取り寄せる依頼用紙(ユーザー提供の実物と同じ体裁)としてCSV出力する。
+  // 日付・お問合せ番号の2列が西濃側に必要な項目(実物の依頼用紙と同じ並び)、
+  // 得意先名・配達場所は太幸側で照合しやすいように付け足した参考情報。
+  function downloadFaxRequestCsv() {
+    const targets = seinoTokyoUnknown.filter((r) => selectedFaxKeys.has(r.key));
+    if (targets.length === 0) return;
+
+    const lines: string[] = [];
+    lines.push(csvEscape("西濃運輸㈱御中"));
+    lines.push(csvEscape("いつもお世話になります。送り状の控えのFAXお願いします。"));
+    lines.push(csvEscape(`返信先FAX:${SEINO_TOKYO_FAX_REPLY_NUMBER}`));
+    lines.push("");
+    lines.push(["日付", "お問合せ番号", "得意先名(参考)", "配達場所(参考)"].map(csvEscape).join(","));
+    for (const r of targets) {
+      lines.push(
+        [r.dateLabel, r.waybillNo, r.customerName ?? "", r.deliveryLocation]
+          .map(csvEscape)
+          .join(",")
+      );
+    }
+    lines.push("");
+    lines.push(csvEscape(SEINO_TOKYO_FAX_SENDER_LABEL));
+    lines.push(csvEscape(`TEL:${SEINO_TOKYO_FAX_SENDER_TEL}`));
+
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    a.download = `西濃東京_送り状控えFAX依頼_${today}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -691,6 +774,71 @@ export default function FreightCheck({
               </tbody>
             </table>
           </div>
+
+          {seinoTokyoUnknown.length > 0 && (
+            <div className="card" style={{ marginBottom: 20 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 8,
+                  flexWrap: "wrap",
+                  gap: 8,
+                }}
+              >
+                <h2 style={{ margin: 0 }}>
+                  西濃運輸(東京本社) 受注番号不明分({seinoTokyoUnknown.length.toLocaleString("ja-JP")}件)
+                </h2>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <button className="ghost-btn" onClick={selectAllFaxKeys}>
+                    全選択
+                  </button>
+                  <button className="ghost-btn" onClick={clearFaxKeys}>
+                    選択解除
+                  </button>
+                  <button className="ghost-btn" onClick={downloadFaxRequestCsv} disabled={selectedFaxKeys.size === 0}>
+                    選択した{selectedFaxKeys.size}件を西濃FAX依頼用CSVで出力
+                  </button>
+                </div>
+              </div>
+              <p className="subtitle" style={{ margin: "0 0 8px" }}>
+                管理番号(自社受注番号)が空欄で、売上データからは当てられない行です。チェックした行を、西濃運輸に送り状の控えをFAXで取り寄せる依頼用紙(CSV)として出力できます。
+              </p>
+              <div className="table-scroll table-scroll-v">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 32 }}></th>
+                      <th>受付日</th>
+                      <th>お問合せ番号</th>
+                      <th>得意先名(納品先)</th>
+                      <th>配達場所</th>
+                      <th style={{ textAlign: "right" }}>実費運賃</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {seinoTokyoUnknown.map((r) => (
+                      <tr key={r.key}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedFaxKeys.has(r.key)}
+                            onChange={() => toggleFaxKey(r.key)}
+                          />
+                        </td>
+                        <td>{r.dateLabel}</td>
+                        <td>{r.waybillNo}</td>
+                        <td>{r.customerName ?? "―"}</td>
+                        <td>{r.deliveryLocation || "―"}</td>
+                        <td style={{ textAlign: "right" }}>{fmtYen(r.actualFreight)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
