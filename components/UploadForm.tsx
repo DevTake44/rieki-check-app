@@ -4,6 +4,7 @@ import { useState } from "react";
 import Papa from "papaparse";
 import { mapSalesRow, mapPurchaseRow, mapTransferRow, mapShippingNoteRow } from "@/lib/row-mapping";
 import type { SalesRowInsert, PurchaseRowInsert, TransferRowInsert, ShippingNoteRowInsert } from "@/lib/row-mapping";
+import Link from "next/link";
 
 type Kind = "sales" | "purchase" | "transfer" | "shippingNote";
 
@@ -402,13 +403,13 @@ export default function UploadForm() {
       <p className="subtitle">
         基幹システムから出力したCSV(shift_jis / CP932エンコーディング)をそのままアップロードできます。同じ受注番号・仕入番号の行は自動的に上書き(upsert)され、重複は発生しません。
       </p>
-      <a
+      <Link
         href="/data-status"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginBottom: 16 }}
       >
         データ更新状況を見る(最新のデータがどこまで入っているか)
-      </a>
+      </Link>
       {renderBlock("sales", "売上データ", "uriage.csvと同じ列構成のCSVを選択してください。", salesStatus)}
       {renderBlock(
         "purchase",
@@ -430,51 +431,51 @@ export default function UploadForm() {
         shippingNoteStatus,
         "accumulate"
       )}
-      <a
+      <Link
         href="/benrinet-check"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         べんりネット照合
-      </a>
-      <a
+      </Link>
+      <Link
         href="/payable-check"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         買掛月報照合
-      </a>
-      <a
+      </Link>
+      <Link
         href="/life-check"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         ライフ照合
-      </a>
-      <a
+      </Link>
+      <Link
         href="/life-billing-check"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         ライフ請求金額照合
-      </a>
-      <a
+      </Link>
+      <Link
         href="/freight-check"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         運賃照合
-      </a>
-      <a
+      </Link>
+      <Link
         href="/data-status"
         className="ghost-btn"
         style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
       >
         データ更新状況
-      </a>
-      <a href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
+      </Link>
+      <Link href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
         ← メニューに戻る
-      </a>
+      </Link>
     </div>
   );
 }

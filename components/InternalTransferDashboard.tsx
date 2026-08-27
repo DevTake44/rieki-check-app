@@ -5,6 +5,7 @@ import type { InternalTransferLine, TransferPendingLine } from "@/lib/types";
 import { branchLabel, BRANCH_NAMES } from "@/lib/branch-names";
 import { SUPPLIER_LOCATIONS } from "@/lib/supplier-locations";
 import { periodKeyFor, periodRangeFor, periodLabelFor } from "@/lib/period";
+import Link from "next/link";
 
 function fmtYen(v: number | null | undefined) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -321,27 +322,27 @@ export default function InternalTransferDashboard({
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h1>社内間金額</h1>
         <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-          <a href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
+          <Link href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
             売上利益
-          </a>
-          <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             べんりネット照合
-          </a>
-          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             買掛月報照合
-          </a>
-          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ照合
-          </a>
-          <a href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ請求金額照合
-          </a>
-          <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
-          </a>
-          <a href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
             ← メニューに戻る
-          </a>
+          </Link>
         </div>
       </div>
       <p className="subtitle">

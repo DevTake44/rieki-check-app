@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 // ツール一覧のメニュー画面。各ツールの照合結果はSupabase等どこにも保存しないため、
 // このページ自体は完全に静的なリンク集で、サーバー側のデータ取得は不要。
 export const dynamic = "force-dynamic";
@@ -97,7 +99,7 @@ export default function MenuPage() {
             }}
           >
             {TOOLS.filter((t) => t.category === category).map((t) => (
-              <a
+              <Link
                 key={t.href}
                 href={t.href}
                 className="card"
@@ -112,7 +114,7 @@ export default function MenuPage() {
                 <p className="cell-sub" style={{ margin: 0, lineHeight: 1.6 }}>
                   {t.description}
                 </p>
-              </a>
+              </Link>
             ))}
           </div>
         </div>

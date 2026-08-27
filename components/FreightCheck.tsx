@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Papa from "papaparse";
 import type { ShippingNoteMappingRow, FreightSalesLine } from "@/lib/types";
+import Link from "next/link";
 
 /**
  * 運賃照合ダッシュボード
@@ -525,9 +526,9 @@ export default function FreightCheck({
         <h2 style={{ marginTop: 0 }}>① 送り状番号↔受注番号の対応データ</h2>
         <p className="subtitle" style={{ margin: "0 0 8px" }}>
           「送り状問合せ」CSVから取り込み済みのデータです。取り込み・更新は
-          <a href="/upload" style={{ marginLeft: 4 }}>
+          <Link href="/upload" style={{ marginLeft: 4 }}>
             データ更新
-          </a>
+          </Link>
           画面から行ってください(3か月分プールされ、古いデータは自動削除されます)。
         </p>
         <div style={{ fontSize: 13 }}>
@@ -762,37 +763,37 @@ export default function FreightCheck({
       )}
 
       <div style={{ marginTop: 20 }}>
-        <a
+        <Link
           href="/benrinet-check"
           className="ghost-btn"
           style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
         >
           べんりネット照合
-        </a>
-        <a
+        </Link>
+        <Link
           href="/payable-check"
           className="ghost-btn"
           style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
         >
           買掛月報照合
-        </a>
-        <a
+        </Link>
+        <Link
           href="/life-check"
           className="ghost-btn"
           style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
         >
           ライフ照合
-        </a>
-        <a
+        </Link>
+        <Link
           href="/life-billing-check"
           className="ghost-btn"
           style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
         >
           ライフ請求金額照合
-        </a>
-        <a href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
+        </Link>
+        <Link href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
           ← メニューに戻る
-        </a>
+        </Link>
       </div>
     </div>
   );

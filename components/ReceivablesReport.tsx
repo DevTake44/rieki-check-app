@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Papa from "papaparse";
 import { branchLabel } from "@/lib/branch-names";
+import Link from "next/link";
 
 /**
  * 売掛残高月報
@@ -732,23 +733,23 @@ export default function ReceivablesReport() {
       )}
 
       <div style={{ marginTop: 20 }}>
-        <a
+        <Link
           href="/payable-check"
           className="ghost-btn"
           style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
         >
           買掛月報照合
-        </a>
-        <a
+        </Link>
+        <Link
           href="/freight-check"
           className="ghost-btn"
           style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}
         >
           運賃照合
-        </a>
-        <a href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
+        </Link>
+        <Link href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
           ← メニューに戻る
-        </a>
+        </Link>
       </div>
     </div>
   );

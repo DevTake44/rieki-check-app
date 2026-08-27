@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Papa from "papaparse";
+import Link from "next/link";
 
 /**
  * ライフ請求金額照合ダッシュボード
@@ -620,24 +621,24 @@ export default function LifeBillingCheck() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
-          <a href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
+          <Link href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
             売上利益
-          </a>
-          <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             べんりネット照合
-          </a>
-          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             買掛月報照合
-          </a>
-          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ照合(受注番号さがし)
-          </a>
-          <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
-          </a>
-          <a href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
             ← メニューに戻る
-          </a>
+          </Link>
         </div>
       </div>
 

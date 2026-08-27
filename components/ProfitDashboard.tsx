@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import type { ProfitOrder } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
+import Link from "next/link";
 import {
   periodKeyFor,
   periodRangeFor,
@@ -647,27 +648,27 @@ export default function ProfitDashboard({ orders }: { orders: ProfitOrder[] }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h1>売上利益</h1>
         <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-          <a href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
+          <Link href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
             社内間金額
-          </a>
-          <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             べんりネット照合
-          </a>
-          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             買掛月報照合
-          </a>
-          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ照合
-          </a>
-          <a href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ請求金額照合
-          </a>
-          <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
-          </a>
-          <a href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
             ← メニューに戻る
-          </a>
+          </Link>
         </div>
       </div>
       <p className="subtitle">

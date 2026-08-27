@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Papa from "papaparse";
+import Link from "next/link";
 
 /**
  * べんりネット照合ダッシュボード
@@ -535,27 +536,27 @@ export default function BenrinetCheck() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-          <a href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
+          <Link href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
             売上利益
-          </a>
-          <a href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
             社内間金額
-          </a>
-          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             買掛月報照合
-          </a>
-          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ照合
-          </a>
-          <a href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ請求金額照合
-          </a>
-          <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
-          </a>
-          <a href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
             ← メニューに戻る
-          </a>
+          </Link>
         </div>
       </div>
 

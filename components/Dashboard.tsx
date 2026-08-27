@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { PriceIncreaseAlert } from "@/lib/types";
 import { branchLabel, branchNameOnly } from "@/lib/branch-names";
 import { repLabel, repNameOnly } from "@/lib/rep-names";
+import Link from "next/link";
 
 type SortKey =
   | "purchase_date"
@@ -238,9 +239,9 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h1>値上げ検知ダッシュボード</h1>
         <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
-          <a href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+          <Link href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
             全ツール一覧(メニュー)
-          </a>
+          </Link>
           {/* 別プロジェクト(商品単価検索)への単純リンク。合言葉ロックは先方側にかかっているため、
               クリックした人が別途合言葉を入力する。品番などを引き継ぐ連携はあえてしていない
               (行クリックのたびに裏で検索が走ると使う側が混乱するため、2026-07-31に見送り)。 */}
@@ -253,27 +254,27 @@ export default function Dashboard({ rows }: { rows: PriceIncreaseAlert[] }) {
           >
             商品単価検索を開く
           </a>
-          <a href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
+          <Link href="/internal-transfer" className="ghost-btn" style={{ textDecoration: "none" }}>
             社内間金額
-          </a>
-          <a href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/profit" className="ghost-btn" style={{ textDecoration: "none" }}>
             売上利益
-          </a>
-          <a href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/benrinet-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             べんりネット照合
-          </a>
-          <a href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/payable-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             買掛月報照合
-          </a>
-          <a href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ照合
-          </a>
-          <a href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/life-billing-check" className="ghost-btn" style={{ textDecoration: "none" }}>
             ライフ請求金額照合
-          </a>
-          <a href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+          </Link>
+          <Link href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
             データ更新
-          </a>
+          </Link>
         </div>
       </div>
       <p className="subtitle">

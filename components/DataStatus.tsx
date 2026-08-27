@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 /**
  * データ更新状況
  *
@@ -132,12 +134,12 @@ export default function DataStatus({ statuses }: { statuses: TableStatus[] }) {
       </div>
 
       <div style={{ marginTop: 20 }}>
-        <a href="/upload" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}>
+        <Link href="/upload" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none", marginRight: 10 }}>
           データ更新
-        </a>
-        <a href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
+        </Link>
+        <Link href="/menu" className="ghost-btn" style={{ display: "inline-block", textDecoration: "none" }}>
           ← メニューに戻る
-        </a>
+        </Link>
       </div>
     </div>
   );
