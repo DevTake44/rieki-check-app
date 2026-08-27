@@ -44,19 +44,25 @@ import type { ShippingNoteMappingRow, FreightSalesLine } from "@/lib/types";
  *   「原票No.」が"999"始まりの行は、特定の送り状に紐づかない燃料サーチャージの
  *   アカウント単位集計行(着地名が空)で、送り状番号としてはヒットしない
  *   (=自動的に「対応する受注が見つからない」扱いになる。これは仕様として正しい)。
+ *   配達場所(県・市)は「着地名/発地名」列。得意先名の対応表(shipping_note_mapping)に
+ *   無い場合のフォールバック表示には「備考1」列(得意先名が入っていることが多い)を使う。
  * 福山通運: 得意先コード,部課所コード,締め日,請求書番号,発送年月日,原票番号,特殊コード,
  *   元着区分,個数,才数,重量,運賃,中継料,保険料,諸料金,諸料金区分,住所漢字区分,荷受人住所,
  *   名称漢字区分,荷受人名称,荷受人コード,お客様出荷番号,ＪＩＳコード,輸送距離,備考,
  *   サーチャージ料。実費は「運賃+中継料+保険料+諸料金+サーチャージ料」の合計とする
  *   (運賃だけでなく実際に支払う金額全体で比較するため)。発送年月日はYYMMDD(西暦下2桁)。
+ *   配達場所(県・市)は「荷受人住所」列。「荷受人名称」は福通側の営業所名等になっている
+ *   ことが多く得意先名としては使えないため、得意先不明時のフォールバック表示は無し。
  * 西濃運輸(東京本社): 回収店コード,回収店名称,請求荷主コード,荷送人コード,荷送人名称,…,
  *   受付年月日,元着選択,元着選択名称,お問合せ番号,お届け先名称１,…,直通運賃,諸料金,減額,
  *   実費,運賃合計,備考,…,管理番号,… という形式。他の2社と違い、送り状番号↔受注番号の
  *   対応表(shipping_note_mapping)を経由せず、「管理番号」列がそのまま自社の受注番号
  *   そのものになっている(2026-08-26判明: 太幸側でAR/売上計上に使う受注番号を、西濃側が
  *   請求データにそのまま印字して返してくれる形式のため)。そのため管理番号を直接
- *   orderNoとして使い、実費は「運賃合計」列を使う。管理番号が空欄の行(特定の送り状に
- *   紐づかない燃料サーチャージ等の集計行、お問合せ番号が"999"始まり)は対象外とする。
+ *   orderNoとして使い、実費は「運賃合計」列を使う。お問合せ番号が空欄の行(特定の送り状に
+ *   紐づかない燃料サーチャージ等の集計行)だけを対象外とし、管理番号が空欄でもお問合せ番号
+ *   がある行は結果に含める(受注番号不明として扱う)。配達場所(県・市)は「着地名称」列。
+ *   得意先不明時のフォールバック表示には「お届け先名称１」列を使う。
  *
  * ファイル形式は、ヘッダー行に「管理番号」を含むか「原票No」を含むか「原票番号」を
  * 含むかで自動判別する。
@@ -69,7 +75,11 @@ type InvoiceLine = {
   waybillNo: string;
   dateLabel: string;
   amount: number;
+  // 得意先が特定できない時のフォールバック表示用(2026-08-26追加)。会社ごとに
+  // 一番それらしい名称項目(西濃=備考1、西濃(東京本社)=お届け先名称、福通=無し)を入れる。
   destinationName: string;
+  // 配達場所(県・市)。会社ごとの住所/着地名項目からそのまま取る(2026-08-26追加)。
+  deliveryLocation: string;
   note: string;
   sourceFile: string;
   // 西濃運輸(東京本社)のみ設定される。設定されている場合、送り状番号↔受注番号の
@@ -84,7 +94,7 @@ type ResultRow = {
   carrier: Carrier;
   waybillNo: string;
   dateLabel: string;
-  destinationName: string;
+  deliveryLocation: string;
   orderNo: string | null;
   customerName: string | null;
   branchCode: string | null;
@@ -92,7 +102,6 @@ type ResultRow = {
   deliveryNoteNo: string | null;
   actualFreight: number;
   chargedFreight: number | null;
-  assumedCost: number | null;
   margin: number | null;
   status: MatchStatus;
 };
@@ -148,14 +157,19 @@ function parseSeinoRows(rows: string[][], fileName: string): InvoiceLine[] {
     const month = cell(cols, 0);
     const day = cell(cols, 1);
     const amount = Number(cell(cols, 8).replace(/,/g, "")) || 0;
-    const destinationName = cell(cols, 5);
-    const note = [cell(cols, 10), cell(cols, 11)].filter(Boolean).join(" ");
+    // 配達場所(県・市)は「着地名/発地名」列(例: 高知県 高知市)。
+    const deliveryLocation = cell(cols, 5);
+    // 得意先名の対応表(shipping_note_mapping)が無いケースのフォールバック用に、
+    // 「備考1」列(得意先名が入っていることが多い、例: イオンリテール㈱イオ)を使う。
+    const destinationName = cell(cols, 10);
+    const note = cell(cols, 11);
     out.push({
       carrier: "西濃運輸",
       waybillNo,
       dateLabel: month && day ? `${month}/${day}` : "",
       amount,
       destinationName,
+      deliveryLocation,
       note,
       sourceFile: fileName,
     });
@@ -177,7 +191,11 @@ function parseFukuyamaRows(rows: string[][], fileName: string): InvoiceLine[] {
     const misc = Number(cell(cols, 14).replace(/,/g, "")) || 0;
     const surcharge = Number(cell(cols, 25).replace(/,/g, "")) || 0;
     const amount = freight + relay + insurance + misc + surcharge;
-    const destinationName = cell(cols, 19);
+    // 配達場所(県・市)は「荷受人住所」列(例: 広島県府中市)。
+    const deliveryLocation = cell(cols, 17);
+    // 「荷受人名称」は福通側の営業所名等になっていることが多く得意先名としては
+    // 使えないため、得意先不明時のフォールバックは無し(空欄のまま)とする。
+    const destinationName = "";
     const note = cell(cols, 24);
     out.push({
       carrier: "福山通運",
@@ -185,6 +203,7 @@ function parseFukuyamaRows(rows: string[][], fileName: string): InvoiceLine[] {
       dateLabel,
       amount,
       destinationName,
+      deliveryLocation,
       note,
       sourceFile: fileName,
     });
@@ -193,7 +212,8 @@ function parseFukuyamaRows(rows: string[][], fileName: string): InvoiceLine[] {
 }
 
 // 西濃運輸(東京本社)形式: 列番号(0始まり)は固定のヘッダー構成に基づく。
-// 9=受付年月日, 12=お問合せ番号, 13=お届け先名称１, 26=運賃合計, 27=備考, 43=管理番号。
+// 9=受付年月日, 12=お問合せ番号, 13=お届け先名称１, 26=運賃合計, 27=備考,
+// 39=着地名称(県・市。例: 福岡県 糟屋郡 新宮町), 43=管理番号。
 //
 // 2026-08-26修正: 当初は「管理番号(43列目)が空欄の行は除外」としていたが、これだと
 // お届け先名称や金額など実際の請求データが入っている行(＝管理番号を書き忘れている
@@ -213,6 +233,7 @@ function parseSeinoTokyoRows(rows: string[][], fileName: string): InvoiceLine[] 
     const dateLabel = /^\d{8}$/.test(dateRaw) ? `${dateRaw.slice(0, 4)}/${dateRaw.slice(4, 6)}/${dateRaw.slice(6, 8)}` : dateRaw;
     const amount = Number(cell(cols, 26).replace(/,/g, "")) || 0;
     const destinationName = cell(cols, 13);
+    const deliveryLocation = cell(cols, 39);
     const note = cell(cols, 27);
     out.push({
       carrier: "西濃運輸(東京本社)",
@@ -221,6 +242,7 @@ function parseSeinoTokyoRows(rows: string[][], fileName: string): InvoiceLine[] 
       dateLabel,
       amount,
       destinationName,
+      deliveryLocation,
       note,
       sourceFile: fileName,
     });
@@ -267,16 +289,13 @@ export default function FreightCheck({
     return m;
   }, [freightSalesLines]);
 
-  // 受注番号ごとの、商品コード="99"(運賃)行だけを合算した金額(得意先への請求額・見込み原価)。
+  // 受注番号ごとの、商品コード="99"(運賃)行だけを合算した金額(得意先への請求額)。
   const freightByOrder = useMemo(() => {
-    const m = new Map<string, { sellPrice: number; assumedCost: number }>();
+    const m = new Map<string, number>();
     for (const l of freightSalesLines) {
       if (!l.order_no) continue;
       if (l.item_code !== "99") continue;
-      const prev = m.get(l.order_no);
-      const sellPrice = (prev?.sellPrice ?? 0) + (l.sell_price ?? 0);
-      const assumedCost = (prev?.assumedCost ?? 0) + (l.assumed_cost ?? 0);
-      m.set(l.order_no, { sellPrice, assumedCost });
+      m.set(l.order_no, (m.get(l.order_no) ?? 0) + (l.sell_price ?? 0));
     }
     return m;
   }, [freightSalesLines]);
@@ -330,7 +349,6 @@ export default function FreightCheck({
       const orderNo = line.directOrderNo ?? mapRow?.order_no ?? null;
       let status: MatchStatus;
       let chargedFreight: number | null = null;
-      let assumedCost: number | null = null;
       let customerName: string | null = mapRow?.customer_name ?? null;
       let branchCode: string | null = null;
       let repCode: string | null = null;
@@ -350,11 +368,10 @@ export default function FreightCheck({
           customerName = orderInfo.customerName ?? customerName;
         }
 
-        if (freight) {
+        if (freight !== undefined) {
           // 売上データがあり、かつ運賃(商品コード99)行もある → 通常の照合。
           status = "matched";
-          chargedFreight = freight.sellPrice;
-          assumedCost = freight.assumedCost;
+          chargedFreight = freight;
           margin = chargedFreight - line.amount;
         } else if (orderInfo) {
           // 売上データはあるが運賃(99)行が無い → 請求漏れ。0円請求とみなして
@@ -369,12 +386,20 @@ export default function FreightCheck({
         }
       }
 
+      // 2026-08-26追加: 受注番号が不明、または受注番号はあっても売上データから
+      // 得意先名を当てられない(例: 末尾5桁が00000のような仮番号)場合は、得意先名の
+      // 代わりに請求データ自体が持っている納品先名(会社ごとに異なる項目、無い場合は
+      // 空欄のまま)を表示する。実際の得意先名と区別できるよう「(納品先)」を付ける。
+      if (!customerName && line.destinationName) {
+        customerName = `${line.destinationName}(納品先)`;
+      }
+
       return {
         key: `${line.carrier}-${line.waybillNo}-${i}`,
         carrier: line.carrier,
         waybillNo: line.waybillNo,
         dateLabel: line.dateLabel,
-        destinationName: line.destinationName,
+        deliveryLocation: line.deliveryLocation,
         orderNo,
         customerName,
         branchCode,
@@ -382,7 +407,6 @@ export default function FreightCheck({
         deliveryNoteNo,
         actualFreight: line.amount,
         chargedFreight,
-        assumedCost,
         margin,
         status,
       };
@@ -443,6 +467,7 @@ export default function FreightCheck({
       "日付",
       "受注番号",
       "得意先名",
+      "配達場所",
       "拠点番号",
       "営業担当",
       "売上番号(納品書番号)",
@@ -466,6 +491,7 @@ export default function FreightCheck({
           r.dateLabel,
           r.orderNo ?? "",
           r.customerName ?? "",
+          r.deliveryLocation,
           r.branchCode ?? "",
           r.repCode ?? "",
           r.deliveryNoteNo ?? "",
@@ -688,6 +714,7 @@ export default function FreightCheck({
                     <th>日付</th>
                     <th>受注番号</th>
                     <th>得意先名</th>
+                    <th>配達場所</th>
                     <th>拠点番号</th>
                     <th>営業担当</th>
                     <th>売上番号</th>
@@ -705,6 +732,7 @@ export default function FreightCheck({
                       <td>{r.dateLabel}</td>
                       <td>{r.orderNo ?? "―"}</td>
                       <td>{r.customerName ?? "―"}</td>
+                      <td>{r.deliveryLocation || "―"}</td>
                       <td>{r.branchCode ?? "―"}</td>
                       <td>{r.repCode ?? "―"}</td>
                       <td>{r.deliveryNoteNo ?? "―"}</td>
