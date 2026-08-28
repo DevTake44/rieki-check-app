@@ -79,6 +79,34 @@ td.num, th.num { text-align: right; }
 
 .table-scroll { overflow-x: auto; }
 .table-scroll-v { max-height: 640px; overflow-y: auto; }
+
+/* 2026-08-28追加: 経営マトリクス表の縦・横スクロール対応。
+   縦スクロール中も見出し行が見えるようにヘッダーを上端に固定し、
+   横スクロール中も先頭列(名称)と末尾列(今期計)が見えるように左右に固定する。 */
+.table-scroll-v thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  z-index: 2;
+}
+.mat-sticky-name {
+  position: sticky;
+  left: 0;
+  background: var(--card-bg);
+  z-index: 1;
+  box-shadow: 2px 0 4px -2px rgba(0, 0, 0, 0.12);
+}
+.mat-sticky-total {
+  position: sticky;
+  right: 0;
+  background: var(--card-bg);
+  z-index: 1;
+  box-shadow: -2px 0 4px -2px rgba(0, 0, 0, 0.12);
+}
+thead .mat-sticky-name,
+thead .mat-sticky-total {
+  z-index: 3;
+}
 .cell-sub { font-size: 11px; color: var(--text-muted); }
 
 .filter-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }

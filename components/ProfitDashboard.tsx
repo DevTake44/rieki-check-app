@@ -350,7 +350,13 @@ export default function ProfitDashboard({
   }, [periodMode, periodKey, currentFYStart, previousFYStart]);
 
   const branches = useMemo(() => uniqueSortedNumeric(orders.map((o) => o.branch_code)), [orders]);
-  const reps = useMemo(() => uniqueSortedNumeric(orders.map((o) => o.rep_code)), [orders]);
+  // 2026-08-28変更: 「拠点を選んだら、拠点の担当者だけを選べるようにして」に対応。
+  // 拠点が選択されているときは、その拠点に所属する受注が実際にある担当だけに絞る
+  // (拠点未選択時は従来通り全担当を表示)。
+  const reps = useMemo(() => {
+    const source = branch ? orders.filter((o) => o.branch_code === branch) : orders;
+    return uniqueSortedNumeric(source.map((o) => o.rep_code));
+  }, [orders, branch]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -479,6 +485,23 @@ export default function ProfitDashboard({
     if (matDim === "customer" && !matFilter.trim()) {
       rows = [...rows].sort((a, b) => b.cur_ts - a.cur_ts).slice(0, CUSTOMER_MATRIX_LIMIT);
     }
+    // 2026-08-28変更: 拠点別のときは、金額や名前ではなく常に拠点番号順(昇順)で並べる。
+    // 拠点番号は「東京(21)」のように意味のある割り振りがされており、金額順だと
+    // 毎回顔ぶれの位置が変わって見づらいため、拠点別だけは固定の並びにする
+    // (拠点コードが無い行は末尾)。
+    if (matDim === "branch") {
+      rows = [...rows].sort((a, b) => {
+        const na = a.code === "__NONE__" ? Infinity : Number(a.code);
+        const nb = b.code === "__NONE__" ? Infinity : Number(b.code);
+        const fa = Number.isFinite(na);
+        const fb = Number.isFinite(nb);
+        if (fa && fb) return na - nb;
+        if (fa) return -1;
+        if (fb) return 1;
+        return a.code.localeCompare(b.code, "ja");
+      });
+      return rows;
+    }
     rows = [...rows].sort((a, b) => {
       const v = matSortKey === "name" ? a.name.localeCompare(b.name, "ja") : matSortValue(matMetric, a) - matSortValue(matMetric, b);
       return v * matSortDir;
@@ -487,6 +510,8 @@ export default function ProfitDashboard({
   }, [matRowsAll, matFilter, matSortKey, matSortDir, matDim, matMetric]);
 
   function toggleMatSort(key: "name" | "total") {
+    // 拠点別は常に拠点番号順で固定なので、見出しクリックでの並び替えは行わない。
+    if (matDim === "branch") return;
     if (matSortKey === key) {
       setMatSortDir((d) => (d === 1 ? -1 : 1) as 1 | -1);
     } else {
@@ -512,6 +537,16 @@ export default function ProfitDashboard({
       }
     }
     setPeriodMode("fy-current");
+    filterCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // 2026-08-28追加: 「内訳の得意先をクリックやチェックで検索窓に転記するようにして」に対応。
+  // 下の「◯◯別 内訳」テーブルで得意先名をクリックすると、その得意先コード(無ければ名前)を
+  // そのまま検索欄に入れて、明細まで絞り込めるようにする。drillInto()と違い、こちらは
+  // 既に絞り込み済みの一覧からの操作なので期間などは変更しない(検索語だけ変える)。
+  function selectCustomerInSearch(code: string) {
+    if (!code) return;
+    setSearch(code);
     filterCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -750,22 +785,35 @@ export default function ProfitDashboard({
           <p className="empty-state">データがありません</p>
         ) : (
           <>
+            {/*
+              2026-08-28追記: 月数(最大12列)ぶん横に長くなるため、横スクロールすると
+              並び替えの基準になる先頭列(拠点/担当/得意先名)と末尾列(今期計)が画面外に
+              出て「全体が見えない」状態になっていた。この2列だけ position:sticky で
+              左端・右端に固定し、横スクロール中も常に見えるようにする
+              (CSSは app/globals.css の .mat-sticky-name / .mat-sticky-total)。
+            */}
             <div className="table-scroll table-scroll-v" style={{ marginTop: 10 }}>
               <table style={{ minWidth: 220 + matCurPeriods.length * 78 + 170 }}>
                 <thead>
                   <tr>
-                    <th className="sortable-th" onClick={() => toggleMatSort("name")}>
+                    <th
+                      className={matDim === "branch" ? "mat-sticky-name" : "sortable-th mat-sticky-name"}
+                      onClick={() => toggleMatSort("name")}
+                    >
                       {MAT_DIMENSIONS.find((d) => d.key === matDim)?.label}
-                      {matSortKey === "name" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
+                      {matSortKey === "name" && matDim !== "branch" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
                     </th>
                     {matCurPeriods.map((p) => (
                       <th key={p} className="num">
                         {parseInt(p.slice(4, 6), 10)}月
                       </th>
                     ))}
-                    <th className="num sortable-th" onClick={() => toggleMatSort("total")}>
+                    <th
+                      className={matDim === "branch" ? "num mat-sticky-total" : "num sortable-th mat-sticky-total"}
+                      onClick={() => toggleMatSort("total")}
+                    >
                       今期計({MAT_METRICS.find((m) => m.key === matMetric)?.label})
-                      {matSortKey === "total" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
+                      {matSortKey === "total" && matDim !== "branch" ? (matSortDir === 1 ? " ▴" : " ▾") : ""}
                     </th>
                   </tr>
                 </thead>
@@ -779,7 +827,7 @@ export default function ProfitDashboard({
                   )}
                   {matRows.map((r) => (
                     <tr key={r.code}>
-                      <td>
+                      <td className="mat-sticky-name">
                         <span className="clickable-cell" onClick={() => drillInto(r)}>
                           {r.name}
                         </span>
@@ -789,7 +837,7 @@ export default function ProfitDashboard({
                           {matMonthCell(matMetric, c, r.prev[i])}
                         </td>
                       ))}
-                      <td className="num">{matTotalCell(matMetric, r)}</td>
+                      <td className="num mat-sticky-total">{matTotalCell(matMetric, r)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -813,7 +861,15 @@ export default function ProfitDashboard({
         <div className="filter-row">
           <div className="filter-field">
             <label>拠点</label>
-            <select value={branch} onChange={(e) => setBranch(e.target.value)}>
+            <select
+              value={branch}
+              onChange={(e) => {
+                setBranch(e.target.value);
+                // 拠点を変えたら、担当は選び直してもらう(前の拠点の担当が
+                // 新しい拠点にいないことがあるため、選択済みの値を引きずらない)。
+                setRep("");
+              }}
+            >
               <option value="">すべて</option>
               {branches.map((b) => (
                 <option key={b} value={b}>
@@ -995,7 +1051,16 @@ export default function ProfitDashboard({
                   <div className="record-item" key={g.key}>
                     <div className="record-line">
                       <span className="rf-value">{g.customerCode || "—"}</span>
-                      <span className="rf-value">{g.customerName || "—"}</span>
+                      <span
+                        className={g.customerCode || g.customerName ? "rf-value clickable-cell" : "rf-value"}
+                        onClick={
+                          g.customerCode || g.customerName
+                            ? () => selectCustomerInSearch(g.customerCode || g.customerName || "")
+                            : undefined
+                        }
+                      >
+                        {g.customerName || "—"}
+                      </span>
                       <span className="rf-value">{branchLabel(g.branchCode ?? null)}</span>
                       <span className="rf-value">{repLabel(g.repCode ?? null)}</span>
                       <span className="rf-value">
@@ -1058,7 +1123,13 @@ export default function ProfitDashboard({
                   return (
                     <tr key={g.key}>
                       <td>
-                        {g.label}
+                        {dimension === "customer" && g.key !== "(得意先不明)" ? (
+                          <span className="clickable-cell" onClick={() => selectCustomerInSearch(g.key)}>
+                            {g.label}
+                          </span>
+                        ) : (
+                          g.label
+                        )}
                         {!!g.unconfirmedCostLineCount && (
                           <span
                             className="badge warning"
