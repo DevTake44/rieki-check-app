@@ -9,6 +9,22 @@ import { clearProfitCache } from "@/lib/profit-cache";
 
 type Kind = "sales" | "purchase" | "transfer" | "shippingNote";
 
+// 2026-08-28追加: 「受注番号+受注行番号+品番+数量+単価」は既存行と同じだが
+// 納品書番号(または納品書行番号)だけが違う、二重登録の疑いがある行の情報。
+// /api/upload/sales が検知して返してくる(削除はせず警告のみ)。
+type DuplicateWarning = {
+  order_no: string;
+  order_line: string;
+  item_code: string | null;
+  qty: number | null;
+  sell_price: number | null;
+  delivery_date: string | null;
+  incoming_delivery_note_no: string | null;
+  incoming_delivery_note_line: string | null;
+  existing_delivery_note_no: string | null;
+  existing_delivery_note_line: string | null;
+};
+
 type Status = {
   fileName: string;
   detectedEncoding: string;
@@ -23,6 +39,8 @@ type Status = {
   refreshed: boolean;
   duplicatesRemoved: number | null;
   pruned: number | null;
+  duplicateWarnings: DuplicateWarning[];
+  duplicateCandidateTotal: number;
 };
 
 const BATCH_SIZE = 1000;
@@ -42,6 +60,8 @@ function initialStatus(): Status {
     refreshed: false,
     duplicatesRemoved: null,
     pruned: null,
+    duplicateWarnings: [],
+    duplicateCandidateTotal: 0,
   };
 }
 
@@ -239,6 +259,10 @@ export default function UploadForm() {
     const batches = chunk(mapped, BATCH_SIZE);
     setStatus((s) => ({ ...s, totalRows: mapped.length, totalBatches: batches.length }));
 
+    // 売上データのときだけ、/api/upload/sales が返してくる重複候補の警告を積み上げる。
+    const allDuplicateWarnings: DuplicateWarning[] = [];
+    let duplicateCandidateTotal = 0;
+
     for (let i = 0; i < batches.length; i++) {
       try {
         const res = await fetch(endpoint, {
@@ -251,11 +275,26 @@ export default function UploadForm() {
           errors.push(`バッチ${i + 1}/${batches.length}: ${json.error ?? res.statusText}`);
         } else {
           sent += batches[i].length;
+          if (kind === "sales") {
+            if (Array.isArray(json.duplicateWarnings)) {
+              allDuplicateWarnings.push(...(json.duplicateWarnings as DuplicateWarning[]));
+            }
+            if (typeof json.duplicateCandidateTotal === "number") {
+              duplicateCandidateTotal += json.duplicateCandidateTotal;
+            }
+          }
         }
       } catch (e) {
         errors.push(`バッチ${i + 1}/${batches.length}: ${String(e)}`);
       }
-      setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors] }));
+      setStatus((s) => ({
+        ...s,
+        sentRows: sent,
+        doneBatches: i + 1,
+        errors: [...errors],
+        duplicateWarnings: allDuplicateWarnings.slice(0, 50),
+        duplicateCandidateTotal,
+      }));
     }
 
     // アップロードが1件でも成功していれば、値上げ検知・売上利益の集計(マテリアライズドビュー)を更新する
@@ -398,6 +437,63 @@ export default function UploadForm() {
                     <li key={i}>{e}</li>
                   ))}
                 </ul>
+              </div>
+            )}
+            {kind === "sales" && status.finished && status.duplicateCandidateTotal > 0 && (
+              <div
+                className="card"
+                style={{ marginTop: 10, padding: "10px 12px", background: "rgba(220,180,40,0.08)" }}
+              >
+                <span className="badge warning">二重登録の疑いあり</span>
+                <span style={{ marginLeft: 8 }}>
+                  受注番号・受注行番号・品番・数量・単価は同じなのに、納品書番号だけが違う行が
+                  {status.duplicateCandidateTotal.toLocaleString("ja-JP")}件見つかりました。
+                  同じ出荷が納品書番号を変えて2回登録されている(=売上が二重計上されている)可能性があります。
+                  ただし、取消(マイナス)行とセットで正しく相殺される訂正や、実際に複数回に分けて出荷しただけの
+                  正当なケースも混ざるため、自動では削除していません。内容を見て、本当に重複しているものだけ手動で削除してください。
+                </span>
+                <div className="table-scroll" style={{ marginTop: 8 }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>受注番号</th>
+                        <th>行</th>
+                        <th>品番</th>
+                        <th className="num">数量</th>
+                        <th className="num">単価</th>
+                        <th>納品日</th>
+                        <th>今回の納品書番号</th>
+                        <th>既存の納品書番号</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {status.duplicateWarnings.map((w, i) => (
+                        <tr key={i}>
+                          <td>{w.order_no}</td>
+                          <td>{w.order_line}</td>
+                          <td>{w.item_code ?? "—"}</td>
+                          <td className="num">{w.qty ?? "—"}</td>
+                          <td className="num">{w.sell_price ?? "—"}</td>
+                          <td>{w.delivery_date ?? "—"}</td>
+                          <td>
+                            {w.incoming_delivery_note_no ?? "—"}
+                            {w.incoming_delivery_note_line ? `-${w.incoming_delivery_note_line}` : ""}
+                          </td>
+                          <td>
+                            {w.existing_delivery_note_no ?? "—"}
+                            {w.existing_delivery_note_line ? `-${w.existing_delivery_note_line}` : ""}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {status.duplicateCandidateTotal > status.duplicateWarnings.length && (
+                  <p className="cell-sub" style={{ marginTop: 6 }}>
+                    上位{status.duplicateWarnings.length}件のみ表示しています(該当は全部で
+                    {status.duplicateCandidateTotal.toLocaleString("ja-JP")}件)。
+                  </p>
+                )}
               </div>
             )}
           </div>
