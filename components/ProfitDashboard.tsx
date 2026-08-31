@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { ProfitOrder } from "@/lib/types";
+import type { ProfitOrder, ProfitLine } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
 import Link from "next/link";
@@ -226,12 +226,25 @@ function matTotalCell(metric: MatMetric, row: MatRow) {
 export default function ProfitDashboard({
   orders,
   headerExtra,
+  matrixLines,
+  matrixLinesLoading,
+  matrixLinesError,
+  onRetryMatrixLines,
 }: {
   orders: ProfitOrder[];
   // 2026-08-27追加: ブラウザ内キャッシュの「最終読み込み: HH:MM」表示と「更新」ボタンを
   // ProfitDashboardLoader側から差し込むためのスロット。このコンポーネント自体は
   // キャッシュの仕組みを知らなくてよいようにするため、任意のReactNodeを受け取るだけにしている。
   headerExtra?: ReactNode;
+  // 2026-08-31追加: 経営マトリクス(月別集計)専用の行単位データ。
+  // v_profit_by_order(受注番号単位)は複数月にまたがる受注の納品日を1つに
+  // 代表させてしまい月別集計がズレるため、経営マトリクスだけはこちら(行単位の
+  // delivery_date)を使う。読み込みはordersとは別に行われるため、届くまでは
+  // nullになる(その間、経営マトリクス以外は通常通りordersで表示できる)。
+  matrixLines: ProfitLine[] | null;
+  matrixLinesLoading?: boolean;
+  matrixLinesError?: string | null;
+  onRetryMatrixLines?: () => void;
 }) {
   const maxOrderDate = useMemo(() => {
     const dates = orders.map((o) => o.order_date).filter((d): d is string => !!d);
@@ -393,15 +406,29 @@ export default function ProfitDashboard({
     [previousFYStart]
   );
 
+  // 2026-08-31変更: 経営マトリクスの月別集計は、受注番号単位(orders/ProfitOrder)
+  // ではなく行単位(matrixLines/ProfitLine)で行う。
+  // 理由: v_profit_by_order は受注番号ごとに複数行を合計し、delivery_dateも
+  // 「その受注の中で一番遅い納品日」1つに代表させてしまう。1つの受注番号が
+  // 複数月にまたがって出荷されるのはよくあるパターンで、そのままだと本来
+  // 別の月の売上のはずの金額まで最後の月にまとめて計上されてしまう
+  // (実例: 受注番号610023464は4月・5月・6月の3回に分けて出荷されているが、
+  // v_profit_by_orderのdelivery_dateは最終出荷日の6月1つに代表され、
+  // 4・5月分の売上(合計15万6千円)まで6月として表示されてしまっていた)。
+  // 行単位のmatrixLinesならdelivery_dateが実際の納品日のままなので、この問題が起きない。
+  // なお年間合計・受注番号別の一覧(このコンポーネントの他の部分)は元々ordersの
+  // 集計で正しいため、影響を受けるのは経営マトリクスの月別内訳だけ。
+  const matrixLinesForCalc = matrixLines ?? [];
+
   // 会社全体で見て、今期のどの月まで実際に売上データが入っているか(=確定している月数)。
   // これが無いと、前期との「同期間」比較が正しくできない(まだ数件しか入っていない月を
   // 含めてしまうと前期側が不当に不利になる)。
   const latestPeriodIndex = useMemo(() => {
     if (!matCurPeriods.length) return -1;
     const hasData = new Array(matCurPeriods.length).fill(false);
-    for (const o of orders) {
-      if (!o.delivery_date || !o.revenue) continue;
-      const idx = matCurPeriods.indexOf(periodKeyFor(o.delivery_date));
+    for (const l of matrixLinesForCalc) {
+      if (!l.delivery_date || !l.revenue) continue;
+      const idx = matCurPeriods.indexOf(periodKeyFor(l.delivery_date));
       if (idx !== -1) hasData[idx] = true;
     }
     let last = -1;
@@ -409,14 +436,14 @@ export default function ProfitDashboard({
       if (v) last = i;
     });
     return last;
-  }, [orders, matCurPeriods]);
+  }, [matrixLinesForCalc, matCurPeriods]);
 
   const matRowsAll: MatRow[] = useMemo(() => {
     if (!matCurPeriods.length) return [];
     const map = new Map<string, { name: string; cur: MonthCell[]; prev: MonthCell[] }>();
-    for (const o of orders) {
-      if (!o.delivery_date) continue;
-      const pKey = periodKeyFor(o.delivery_date);
+    for (const l of matrixLinesForCalc) {
+      if (!l.delivery_date) continue;
+      const pKey = periodKeyFor(l.delivery_date);
       const curIdx = matCurPeriods.indexOf(pKey);
       const prevIdx = matPrevPeriods.indexOf(pKey);
       if (curIdx === -1 && prevIdx === -1) continue;
@@ -424,17 +451,17 @@ export default function ProfitDashboard({
       let code: string;
       let name: string;
       if (matDim === "branch") {
-        code = o.branch_code || "__NONE__";
-        name = branchLabel(o.branch_code);
+        code = l.branch_code || "__NONE__";
+        name = branchLabel(l.branch_code);
       } else if (matDim === "rep") {
-        code = o.rep_code || "__NONE__";
-        name = repLabel(o.rep_code);
+        code = l.rep_code || "__NONE__";
+        name = repLabel(l.rep_code);
       } else {
-        code = o.customer_code || o.customer_name || "__NONE__";
+        code = l.customer_code || l.customer_name || "__NONE__";
         name =
-          o.customer_name && o.customer_code
-            ? `${o.customer_name}(${o.customer_code})`
-            : o.customer_name || o.customer_code || "(得意先不明)";
+          l.customer_name && l.customer_code
+            ? `${l.customer_name}(${l.customer_code})`
+            : l.customer_name || l.customer_code || "(得意先不明)";
       }
 
       let entry = map.get(code);
@@ -447,12 +474,12 @@ export default function ProfitDashboard({
         map.set(code, entry);
       }
       if (curIdx !== -1) {
-        entry.cur[curIdx].s += o.revenue;
-        entry.cur[curIdx].c += o.cost;
+        entry.cur[curIdx].s += l.revenue;
+        entry.cur[curIdx].c += l.cost;
       }
       if (prevIdx !== -1) {
-        entry.prev[prevIdx].s += o.revenue;
-        entry.prev[prevIdx].c += o.cost;
+        entry.prev[prevIdx].s += l.revenue;
+        entry.prev[prevIdx].c += l.cost;
       }
     }
 
@@ -469,7 +496,7 @@ export default function ProfitDashboard({
       rows.push({ code, name: e.name, cur: e.cur, prev: e.prev, cur_ts, cur_tc, cur_tm, prev_ts, prev_tc, prev_ts_same, prev_tc_same });
     }
     return rows;
-  }, [orders, matDim, matCurPeriods, matPrevPeriods, latestPeriodIndex]);
+  }, [matrixLinesForCalc, matDim, matCurPeriods, matPrevPeriods, latestPeriodIndex]);
 
   const CUSTOMER_MATRIX_LIMIT = 100;
   const matRows = useMemo(() => {
@@ -781,7 +808,19 @@ export default function ProfitDashboard({
             </div>
           </div>
         )}
-        {currentFYStart === undefined ? (
+        {matrixLinesError ? (
+          <div className="card" style={{ padding: "12px 16px", background: "rgba(192,57,43,0.06)" }}>
+            <p style={{ margin: 0 }}>経営マトリクス用データの読み込みに失敗しました。</p>
+            <pre style={{ whiteSpace: "pre-wrap", color: "var(--critical)", margin: "6px 0" }}>{matrixLinesError}</pre>
+            {onRetryMatrixLines && (
+              <button className="ghost-btn" onClick={onRetryMatrixLines}>
+                もう一度読み込む
+              </button>
+            )}
+          </div>
+        ) : matrixLines === null ? (
+          <p className="empty-state">経営マトリクスを読み込み中…</p>
+        ) : currentFYStart === undefined ? (
           <p className="empty-state">データがありません</p>
         ) : (
           <>

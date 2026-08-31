@@ -1,4 +1,4 @@
-import type { ProfitOrder } from "@/lib/types";
+import type { ProfitOrder, ProfitLine } from "@/lib/types";
 
 /**
  * 売上利益ダッシュボードのブラウザ内キャッシュ(2026-08-27追加)
@@ -42,4 +42,32 @@ export function setProfitCache(orders: ProfitOrder[]): void {
 
 export function clearProfitCache(): void {
   cache = null;
+  clearProfitLinesCache();
+}
+
+/**
+ * 経営マトリクス(月別集計)専用の行単位データのキャッシュ(2026-08-31追加)。
+ * 考え方はorders用のキャッシュと同じだが、取得範囲(since)によって中身が
+ * 変わるため、sinceも一緒に覚えておき、次に必要なsinceと一致する場合だけ使う
+ * (前期データが新たにアップロードされてsinceが古くなった場合などに、
+ * 古い範囲のキャッシュを誤って使い回さないため)。
+ */
+type ProfitLinesCacheEntry = {
+  since: string;
+  lines: ProfitLine[];
+  loadedAt: number;
+};
+
+let linesCache: ProfitLinesCacheEntry | null = null;
+
+export function getProfitLinesCache(since: string): ProfitLinesCacheEntry | null {
+  return linesCache && linesCache.since === since ? linesCache : null;
+}
+
+export function setProfitLinesCache(since: string, lines: ProfitLine[]): void {
+  linesCache = { since, lines, loadedAt: Date.now() };
+}
+
+export function clearProfitLinesCache(): void {
+  linesCache = null;
 }

@@ -2,8 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import ProfitDashboard from "./ProfitDashboard";
-import type { ProfitOrder } from "@/lib/types";
-import { getProfitCache, setProfitCache } from "@/lib/profit-cache";
+import type { ProfitOrder, ProfitLine } from "@/lib/types";
+import {
+  getProfitCache,
+  setProfitCache,
+  getProfitLinesCache,
+  setProfitLinesCache,
+  clearProfitLinesCache,
+} from "@/lib/profit-cache";
+import { periodKeyFor, fiscalYearStartOf, fiscalYearRangeFor } from "@/lib/period";
 
 // v_profit_by_order の全件(8万8千件超、2026-08時点)をサーバー側で1回のレスポンスに
 // 詰めるとJSONで約30MBになり、Vercel Functionsのレスポンスサイズ上限(4.5MB)を超えて
@@ -12,6 +19,10 @@ import { getProfitCache, setProfitCache } from "@/lib/profit-cache";
 // 手元で全件を組み立ててから ProfitDashboard に渡す。
 const REQUESTED_CHUNK_SIZE = 3000;
 const CONCURRENCY = 4;
+
+// 経営マトリクス(月別集計)専用データ(/api/profit-lines)のチャンクサイズ。
+// 1行あたりのフィールド数がordersより少ないため、少し大きめでも安全。
+const LINES_CHUNK_SIZE = 5000;
 
 // 2026-08-26判明(重要): SupabaseのREST API(PostgREST)には1リクエストあたりの
 // 最大件数(Max Rows)設定があり、この案件の環境では要求した3000件ではなく実際には
@@ -23,13 +34,14 @@ const CONCURRENCY = 4;
 // (拠点別マトリクスで東京・10月が本来154,051,945円のはずが53,688,899円と表示された
 // 実際の障害。53,688,899 ÷ 154,051,945 ≈ 34.9%で、1000件/3000件要求の比率と一致)。
 // そのため、次のoffsetは「要求した件数」ではなく「実際に返ってきた件数」を基準に
-// 進めるようにし、最後に合計件数が一致するかも必ず検証する。
+// 進めるようにし、最後に合計件数が一致するかも必ず検証する。/api/profit-lines の
+// 読み込みでも同じ考え方を使う。
 const REQUEST_TIMEOUT_MS = 20000;
 const MAX_RETRIES = 3;
 const MAX_GAP_FILL_ROUNDS = 20;
 
-type ChunkResponse = {
-  rows: ProfitOrder[];
+type ChunkResponse<T> = {
+  rows: T[];
   total: number | null;
   offset: number;
   hasMore: boolean;
@@ -40,11 +52,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchChunkOnce(offset: number, limit: number): Promise<ChunkResponse> {
+async function fetchChunkOnce<T>(url: string, offset: number): Promise<ChunkResponse<T>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`/api/profit-orders?offset=${offset}&limit=${limit}`, {
+    const res = await fetch(url, {
       cache: "no-store",
       signal: controller.signal,
     });
@@ -58,7 +70,7 @@ async function fetchChunkOnce(offset: number, limit: number): Promise<ChunkRespo
         error: json.error ?? res.statusText ?? "不明なエラー",
       };
     }
-    return json as ChunkResponse;
+    return json as ChunkResponse<T>;
   } catch (e) {
     const message =
       e instanceof DOMException && e.name === "AbortError"
@@ -70,10 +82,10 @@ async function fetchChunkOnce(offset: number, limit: number): Promise<ChunkRespo
   }
 }
 
-async function fetchChunk(offset: number, limit: number): Promise<ChunkResponse> {
-  let last: ChunkResponse = { rows: [], total: null, offset, hasMore: false, error: "不明なエラー" };
+async function fetchChunk<T>(url: string, offset: number): Promise<ChunkResponse<T>> {
+  let last: ChunkResponse<T> = { rows: [], total: null, offset, hasMore: false, error: "不明なエラー" };
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const result = await fetchChunkOnce(offset, limit);
+    const result = await fetchChunkOnce<T>(url, offset);
     if (!result.error) return result;
     last = result;
     if (attempt < MAX_RETRIES) {
@@ -92,6 +104,22 @@ function fmtDateTime(ms: number): string {
   )}`;
 }
 
+// 経営マトリクスが必要とする範囲(今期・前期のうち一番古い期の開始日)を、
+// ProfitDashboard.tsx が availablePeriods/availableFiscalYears を計算するのと
+// 全く同じロジックで求める(表示される期間と取得範囲がズレないようにするため)。
+// 前期データが無ければ今期分だけで十分なので、無駄に古いデータまでは取得しない。
+function computeMatrixSince(orders: ProfitOrder[]): string | null {
+  const periodKeys = new Set<string>();
+  orders.forEach((o) => {
+    if (o.delivery_date) periodKeys.add(periodKeyFor(o.delivery_date));
+  });
+  if (periodKeys.size === 0) return null;
+  const fyStarts = Array.from(new Set(Array.from(periodKeys).map(fiscalYearStartOf))).sort((a, b) => b - a);
+  // fyStarts[0]=今期の期首年, fyStarts[1]=前期の期首年(あれば)
+  const targetFYStart = fyStarts.length > 1 ? fyStarts[1] : fyStarts[0];
+  return fiscalYearRangeFor(targetFYStart).from;
+}
+
 export default function ProfitDashboardLoader() {
   // orders: 実際に画面に表示するデータ。キャッシュ由来か、読み込み直後のものかを問わない。
   const [orders, setOrders] = useState<ProfitOrder[] | null>(null);
@@ -106,6 +134,13 @@ export default function ProfitDashboardLoader() {
   // 更新中も古いデータを表示し続けたいので、初回読み込みの状態とは分けている。
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  // 2026-08-31追加: 経営マトリクス専用(行単位)データ。ordersとは別に読み込む。
+  // まだ読み込めていない間も、経営マトリクス以外(受注番号別内訳など)は
+  // ordersだけで表示できるので、ページ全体はブロックしない。
+  const [matrixLines, setMatrixLines] = useState<ProfitLine[] | null>(null);
+  const [matrixLinesLoading, setMatrixLinesLoading] = useState(false);
+  const [matrixLinesError, setMatrixLinesError] = useState<string | null>(null);
 
   const startedRef = useRef(false);
   const cancelledRef = useRef(false);
@@ -129,7 +164,10 @@ export default function ProfitDashboardLoader() {
       }
     };
 
-    const first = await fetchChunk(0, REQUESTED_CHUNK_SIZE);
+    const first = await fetchChunk<ProfitOrder>(
+      `/api/profit-orders?offset=0&limit=${REQUESTED_CHUNK_SIZE}`,
+      0
+    );
     if (cancelledRef.current) return;
     if (first.error || first.total === null) {
       fail(first.error ?? "件数の取得に失敗しました");
@@ -155,7 +193,9 @@ export default function ProfitDashboardLoader() {
 
       for (let i = 0; i < remainingOffsets.length; i += CONCURRENCY) {
         const batch = remainingOffsets.slice(i, i + CONCURRENCY);
-        const results = await Promise.all(batch.map((o) => fetchChunk(o, REQUESTED_CHUNK_SIZE)));
+        const results = await Promise.all(
+          batch.map((o) => fetchChunk<ProfitOrder>(`/api/profit-orders?offset=${o}&limit=${REQUESTED_CHUNK_SIZE}`, o))
+        );
         if (cancelledRef.current) return;
         for (const r of results) {
           if (r.error) {
@@ -173,7 +213,10 @@ export default function ProfitDashboardLoader() {
     let gapFillRounds = 0;
     while (collected.length < firstTotal && gapFillRounds < MAX_GAP_FILL_ROUNDS) {
       if (cancelledRef.current) return;
-      const r = await fetchChunk(collected.length, REQUESTED_CHUNK_SIZE);
+      const r = await fetchChunk<ProfitOrder>(
+        `/api/profit-orders?offset=${collected.length}&limit=${REQUESTED_CHUNK_SIZE}`,
+        collected.length
+      );
       if (r.error) {
         fail(r.error);
         return;
@@ -202,6 +245,103 @@ export default function ProfitDashboardLoader() {
     setOrders(collected);
     setLoadedAt(Date.now());
     if (isRefresh) setRefreshing(false);
+
+    // 手動更新のときは、経営マトリクス用データも古いキャッシュのまま使い回さず、
+    // ordersと一緒に読み直す(仕入確定などでordersの数字が変われば、行単位の
+    // 集計結果も当然変わりうるため)。
+    if (isRefresh) clearProfitLinesCache();
+    runLoadMatrixLines(collected, isRefresh);
+  }
+
+  async function runLoadMatrixLines(currentOrders: ProfitOrder[], forceReload: boolean) {
+    const since = computeMatrixSince(currentOrders);
+    if (since === null) {
+      setMatrixLines([]);
+      return;
+    }
+
+    if (!forceReload) {
+      const cached = getProfitLinesCache(since);
+      if (cached) {
+        setMatrixLines(cached.lines);
+        return;
+      }
+    }
+
+    setMatrixLinesLoading(true);
+    setMatrixLinesError(null);
+
+    const first = await fetchChunk<ProfitLine>(
+      `/api/profit-lines?since=${since}&offset=0&limit=${LINES_CHUNK_SIZE}`,
+      0
+    );
+    if (cancelledRef.current) return;
+    if (first.error || first.total === null) {
+      setMatrixLinesError(first.error ?? "件数の取得に失敗しました");
+      setMatrixLinesLoading(false);
+      return;
+    }
+
+    const firstTotal = first.total;
+    const actualPageSize = first.rows.length;
+    const collected: ProfitLine[] = [...first.rows];
+
+    if (actualPageSize > 0 && collected.length < firstTotal) {
+      const remainingOffsets: number[] = [];
+      for (let o = actualPageSize; o < firstTotal; o += actualPageSize) {
+        remainingOffsets.push(o);
+      }
+      for (let i = 0; i < remainingOffsets.length; i += CONCURRENCY) {
+        const batch = remainingOffsets.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          batch.map((o) =>
+            fetchChunk<ProfitLine>(`/api/profit-lines?since=${since}&offset=${o}&limit=${LINES_CHUNK_SIZE}`, o)
+          )
+        );
+        if (cancelledRef.current) return;
+        for (const r of results) {
+          if (r.error) {
+            setMatrixLinesError(r.error);
+            setMatrixLinesLoading(false);
+            return;
+          }
+          collected.push(...r.rows);
+        }
+      }
+    }
+
+    let gapFillRounds = 0;
+    while (collected.length < firstTotal && gapFillRounds < MAX_GAP_FILL_ROUNDS) {
+      if (cancelledRef.current) return;
+      const r = await fetchChunk<ProfitLine>(
+        `/api/profit-lines?since=${since}&offset=${collected.length}&limit=${LINES_CHUNK_SIZE}`,
+        collected.length
+      );
+      if (r.error) {
+        setMatrixLinesError(r.error);
+        setMatrixLinesLoading(false);
+        return;
+      }
+      if (r.rows.length === 0) break;
+      collected.push(...r.rows);
+      gapFillRounds++;
+    }
+
+    if (cancelledRef.current) return;
+
+    if (collected.length !== firstTotal) {
+      setMatrixLinesError(
+        `経営マトリクス用データの件数が一致しませんでした(取得: ${collected.length.toLocaleString(
+          "ja-JP"
+        )}件 / 本来: ${firstTotal.toLocaleString("ja-JP")}件)。`
+      );
+      setMatrixLinesLoading(false);
+      return;
+    }
+
+    setProfitLinesCache(since, collected);
+    setMatrixLines(collected);
+    setMatrixLinesLoading(false);
   }
 
   useEffect(() => {
@@ -213,6 +353,7 @@ export default function ProfitDashboardLoader() {
       if (cached) {
         setOrders(cached.orders);
         setLoadedAt(cached.loadedAt);
+        runLoadMatrixLines(cached.orders, false);
       } else {
         runLoad(false);
       }
@@ -286,5 +427,14 @@ export default function ProfitDashboardLoader() {
     </div>
   );
 
-  return <ProfitDashboard orders={orders} headerExtra={statusBar} />;
+  return (
+    <ProfitDashboard
+      orders={orders}
+      headerExtra={statusBar}
+      matrixLines={matrixLines}
+      matrixLinesLoading={matrixLinesLoading}
+      matrixLinesError={matrixLinesError}
+      onRetryMatrixLines={() => runLoadMatrixLines(orders, true)}
+    />
+  );
 }

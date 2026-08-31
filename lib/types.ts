@@ -37,6 +37,32 @@ export type InternalTransferLine = {
   amount: number;
 };
 
+// public.v_profit_lines ビューの1行の型のうち、経営マトリクス(月別集計)で
+// 使う列だけに絞ったもの(2026-08-31追加)。
+//
+// 背景: v_profit_by_order は受注番号単位で複数行(納品日が違う場合がある)を
+// 合計してしまい、delivery_date も「その受注の中で一番遅い納品日」1つに
+// 代表させてしまう。そのため、1つの受注が複数月にまたがって出荷される場合
+// (よくある)、経営マトリクスの月別列では実際には別の月の売上のはずの金額まで
+// 一番最後の月にまとめて計上されてしまう不具合があった(受注番号610023464の例:
+// 4月・5月・6月の3回に分けて出荷されているのに、v_profit_by_orderの
+// delivery_dateは最終出荷日の6月30日1つに代表され、4・5月分の売上(合計15万6千円)
+// まで6月の実績として表示されてしまっていた。年間合計・受注番号単位の一覧は
+// 正しいまま、月別の内訳だけが実態とズレる)。
+// 経営マトリクスだけは、受注番号単位ではなく実際の行(sales_line)単位の
+// delivery_dateを使って月別集計するために、この型・専用のAPI
+// (/api/profit-lines)・専用のキャッシュ(lib/profit-cache.ts)を用意した。
+export type ProfitLine = {
+  sales_line_id: number;
+  branch_code: string | null;
+  rep_code: string | null;
+  customer_code: string | null;
+  customer_name: string | null;
+  delivery_date: string | null;
+  revenue: number;
+  cost: number;
+};
+
 // public.v_profit_by_order ビューの1行の型(利益ダッシュボード・受注番号単位)
 export type ProfitOrder = {
   order_no: string;
