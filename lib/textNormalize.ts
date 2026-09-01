@@ -4,6 +4,7 @@
 // - 全角英数字・記号・全角スペース → 半角
 // - 空白をすべて除去、英字は小文字化
 // これにより「ねじ」「ネジ」「ﾈｼﾞ」のような表記ゆれが同じ文字列に揃う。
+// 商品マスタの product_name_normalized 列(品名+カナ品名から生成)を検索する際に使う。
 
 const HALFWIDTH_KATAKANA_MAP: Record<string, string> = {
   "ｱ":"ア","ｲ":"イ","ｳ":"ウ","ｴ":"エ","ｵ":"オ",
@@ -38,13 +39,13 @@ function halfwidthKatakanaToFullwidth(input: string): string {
 }
 
 function hiraganaToKatakana(input: string): string {
-  return input.replace(/[\u3041-\u3096]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+  return input.replace(/[ぁ-ゖ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
 }
 
 function fullwidthAsciiToHalfwidth(input: string): string {
   return input
-    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
-    .replace(/\u3000/g, " ");
+    .replace(/[！-～]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/　/g, " ");
 }
 
 export function normalizeForSearch(input: string | null | undefined): string {

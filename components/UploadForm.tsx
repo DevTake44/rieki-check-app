@@ -4,6 +4,8 @@ import { useState } from "react";
 import Papa from "papaparse";
 import { mapSalesRow, mapPurchaseRow, mapTransferRow, mapShippingNoteRow } from "@/lib/row-mapping";
 import type { SalesRowInsert, PurchaseRowInsert, TransferRowInsert, ShippingNoteRowInsert } from "@/lib/row-mapping";
+import { transformProductMasterCsv } from "@/lib/productMasterTransform";
+import { transformSupplierMasterCsv } from "@/lib/supplierMasterTransform";
 import Link from "next/link";
 import { clearProfitCache } from "@/lib/profit-cache";
 
@@ -118,6 +120,41 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// 商品マスタ・仕入先マスタは、上の4種類(列番号ベース)と違い、
+// 見出し行(ヘッダー)付きのCSVをそのまま読み込む(Papa.parseにheader:trueを渡す)。
+// 全件洗い替え(upsert)方式で、件数も少なめなので進捗表示は簡略化している。
+type MasterKind = "productMaster" | "supplierMaster";
+
+type MasterStatus = {
+  fileName: string;
+  detectedEncoding: string;
+  totalRows: number;
+  sentRows: number;
+  totalBatches: number;
+  doneBatches: number;
+  skipped: string[];
+  errors: string[];
+  running: boolean;
+  finished: boolean;
+};
+
+const MASTER_BATCH_SIZE = 1000;
+
+function initialMasterStatus(): MasterStatus {
+  return {
+    fileName: "",
+    detectedEncoding: "",
+    totalRows: 0,
+    sentRows: 0,
+    totalBatches: 0,
+    doneBatches: 0,
+    skipped: [],
+    errors: [],
+    running: false,
+    finished: false,
+  };
+}
+
 export default function UploadForm() {
   const [salesStatus, setSalesStatus] = useState<Status>(initialStatus());
   const [purchaseStatus, setPurchaseStatus] = useState<Status>(initialStatus());
@@ -128,6 +165,12 @@ export default function UploadForm() {
     purchase: false,
     transfer: false,
     shippingNote: false,
+  });
+  const [productMasterStatus, setProductMasterStatus] = useState<MasterStatus>(initialMasterStatus());
+  const [supplierMasterStatus, setSupplierMasterStatus] = useState<MasterStatus>(initialMasterStatus());
+  const [masterDragOver, setMasterDragOver] = useState<Record<MasterKind, boolean>>({
+    productMaster: false,
+    supplierMaster: false,
   });
 
   async function handleFile(kind: Kind, file: File) {
@@ -318,6 +361,177 @@ export default function UploadForm() {
     }
 
     setStatus((s) => ({ ...s, running: false, finished: true }));
+  }
+
+  async function handleMasterFile(kind: MasterKind, file: File) {
+    const setStatus = kind === "productMaster" ? setProductMasterStatus : setSupplierMasterStatus;
+    setStatus({ ...initialMasterStatus(), fileName: file.name, running: true });
+
+    let text: string;
+    let encoding: string;
+    try {
+      const result = await readFileSmart(file);
+      text = result.text;
+      encoding = result.encoding;
+    } catch (e) {
+      setStatus((s) => ({
+        ...s,
+        running: false,
+        finished: true,
+        errors: [...s.errors, `ファイルの読み込みに失敗しました: ${String(e)}`],
+      }));
+      return;
+    }
+    setStatus((s) => ({ ...s, detectedEncoding: encoding }));
+
+    // このCSVは見出し行(ヘッダー)付きなので、列番号ではなく列名で読み込む。
+    const parsed = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true });
+    const raw = parsed.data;
+
+    const { rows, skipped }: { rows: (import("@/lib/productMasterTransform").ProductMasterRow | import("@/lib/supplierMasterTransform").SupplierMasterRow)[]; skipped: string[] } =
+      kind === "productMaster" ? transformProductMasterCsv(raw) : transformSupplierMasterCsv(raw);
+
+    if (rows.length === 0) {
+      setStatus((s) => ({
+        ...s,
+        running: false,
+        finished: true,
+        skipped,
+        errors: [
+          ...s.errors,
+          "有効なデータ行が1件も見つかりませんでした。見出し行の列名(品番・品名など、または仕入先コード・仕入先名上段など)を確認してください。",
+        ],
+      }));
+      return;
+    }
+
+    const endpoint = kind === "productMaster" ? "/api/upload/product-master" : "/api/upload/supplier-master";
+    const batches = chunk(rows, MASTER_BATCH_SIZE);
+    setStatus((s) => ({ ...s, totalRows: rows.length, totalBatches: batches.length, skipped }));
+
+    let sent = 0;
+    const errors: string[] = [];
+    for (let i = 0; i < batches.length; i++) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: batches[i] }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errors.push(`バッチ${i + 1}/${batches.length}: ${json.error ?? res.statusText}`);
+        } else {
+          sent += typeof json.inserted === "number" ? json.inserted : batches[i].length;
+        }
+      } catch (e) {
+        errors.push(`バッチ${i + 1}/${batches.length}: ${String(e)}`);
+      }
+      setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors] }));
+    }
+
+    setStatus((s) => ({ ...s, running: false, finished: true }));
+  }
+
+  function renderMasterBlock(kind: MasterKind, label: string, hint: string, status: MasterStatus) {
+    const isDragOver = masterDragOver[kind];
+    return (
+      <div
+        className="card"
+        style={{ marginBottom: 20 }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!status.running) setMasterDragOver((d) => ({ ...d, [kind]: true }));
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (!status.running) setMasterDragOver((d) => ({ ...d, [kind]: true }));
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          setMasterDragOver((d) => ({ ...d, [kind]: false }));
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setMasterDragOver((d) => ({ ...d, [kind]: false }));
+          if (status.running) return;
+          const f = e.dataTransfer.files?.[0];
+          if (f) handleMasterFile(kind, f);
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>{label}</h2>
+        <p className="subtitle" style={{ margin: "0 0 12px" }}>
+          {hint}
+        </p>
+        <label
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            padding: "22px 12px",
+            borderRadius: 8,
+            border: isDragOver ? "2px dashed var(--direct)" : "2px dashed var(--border, #d0d5dd)",
+            background: isDragOver ? "rgba(37, 99, 235, 0.06)" : "transparent",
+            cursor: status.running ? "default" : "pointer",
+            textAlign: "center",
+            transition: "border-color 0.1s, background 0.1s",
+          }}
+        >
+          <span style={{ fontSize: 13, color: isDragOver ? "var(--direct)" : undefined }}>
+            {isDragOver ? "ここにドロップ" : "ここにCSVをドラッグ&ドロップ、またはクリックして選択"}
+          </span>
+          <input
+            type="file"
+            accept=".csv"
+            disabled={status.running}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleMasterFile(kind, f);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        {status.fileName && (
+          <div style={{ marginTop: 12, fontSize: 13 }}>
+            <div>ファイル: {status.fileName}</div>
+            {status.detectedEncoding && <div>判定した文字コード: {status.detectedEncoding}</div>}
+            {status.totalRows > 0 && (
+              <div>
+                読み込んだ行数: {status.totalRows.toLocaleString("ja-JP")}件 ／ 送信済み:{" "}
+                {status.sentRows.toLocaleString("ja-JP")}件 ／ バッチ {status.doneBatches}/{status.totalBatches}
+              </div>
+            )}
+            {status.running && (
+              <div style={{ color: "var(--direct)", marginTop: 4 }}>取り込み中(全件洗い替え)…</div>
+            )}
+            {status.finished && status.errors.length === 0 && status.totalRows > 0 && (
+              <div style={{ color: "var(--good)", marginTop: 4 }}>
+                完了しました。{status.sentRows.toLocaleString("ja-JP")}件を反映しました(同じコードの行は上書き)。
+              </div>
+            )}
+            {status.skipped.length > 0 && (
+              <div style={{ color: "var(--direct)", marginTop: 4 }}>
+                {status.skipped.length.toLocaleString("ja-JP")}行を除外しました(先頭の例:{" "}
+                {Array.from(new Set(status.skipped)).slice(0, 3).join(" / ")})。
+              </div>
+            )}
+            {status.errors.length > 0 && (
+              <div style={{ color: "var(--critical)", marginTop: 4 }}>
+                エラーが発生しました:
+                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                  {status.errors.slice(0, 10).map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   }
 
   function renderBlock(
@@ -535,6 +749,18 @@ export default function UploadForm() {
         "送り状問合せCSVを選択してください(得意先コード・受注番号・運送会社名・送り状番号などを含む列構成)。送り状番号をキーに蓄積(upsert)され、発行日が3か月より前の古いデータは自動的に削除されます。",
         shippingNoteStatus,
         "accumulate"
+      )}
+      {renderMasterBlock(
+        "productMaster",
+        "商品マスタ",
+        "見出し行付きのCSVを選択してください(品番・品名・カナ品名・実仕入先・仕入基準単価（バラ）・副仕入先・副仕入単価・削除フラグ・更新年月日)。品番をキーに全件洗い替え(upsert)します。仕入価格検索で、まだ仕入実績が無い商品コードでも「未登録」ではなく「登録済みだが実績なし」と正しく表示するために使います。",
+        productMasterStatus
+      )}
+      {renderMasterBlock(
+        "supplierMaster",
+        "仕入先マスタ",
+        "見出し行付きのCSVを選択してください(仕入先コード・仕入先名上段・仕入先名下段・削除フラグ)。仕入先コードをキーに全件洗い替え(upsert)します。商品マスタの実仕入先コードから仕入先名を表示するために使います。",
+        supplierMasterStatus
       )}
       <Link
         href="/benrinet-check"

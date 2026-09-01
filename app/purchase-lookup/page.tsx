@@ -2,25 +2,25 @@
 import { useState } from "react";
 
 type SupplierPriceRow = {
-  supplier_code: string;
-  supplier_name: string | null;
+  supplier_name: string;
   unit_price: number | null;
   purchase_date: string;
 };
 type PurchaseHistoryRow = {
   purchase_date: string;
-  supplier_code: string | null;
   supplier_name: string | null;
   unit_price: number | null;
-  spec: string | null;
   purchase_number: string;
-  purchase_line: number;
+  purchase_line: string;
   customer_name: string | null;
   sell_price: number | null;
   delivery_note_no: string | null;
   freight_amount: number | null;
 };
 type MasterInfo = {
+  product_name: string;
+  product_kana: string | null;
+  is_deleted: boolean;
   primary_supplier_code: string | null;
   primary_supplier_name: string | null;
   primary_supplier_price: number | null;
@@ -31,9 +31,9 @@ type MasterInfo = {
 type ProductSearchResult = {
   product_code: string;
   product_name: string;
-  latestBySupplier: SupplierPriceRow[];
   master: MasterInfo | null;
-  masterMismatch: boolean;
+  masterMismatch: string | null;
+  latestBySupplier: SupplierPriceRow[];
   history: PurchaseHistoryRow[];
 };
 type SearchOutcome = {
@@ -84,7 +84,9 @@ export default function PurchaseLookupPage() {
   return (
     <div className="page">
       <h1>仕入価格検索</h1>
-      <p className="subtitle">品番の完全一致、または品名のキーワード(あいまい検索)で仕入実績を調べます。</p>
+      <p className="subtitle">
+        品番の完全一致、または品名のキーワード(あいまい検索)で仕入実績を調べます。データはrieki-check自身が持つ直近の仕入・売上データ(保持期間内)のみが対象です。
+      </p>
 
       <div style={{ display: "flex", gap: 16, marginBottom: 16, alignItems: "center" }}>
         <label style={{ fontSize: 13 }}>
@@ -153,12 +155,46 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
         }}
       >
         {result.product_code} {result.product_name}
+        {result.master?.is_deleted && (
+          <span className="badge warning" style={{ marginLeft: 8 }}>
+            商品マスタ上は削除フラグあり
+          </span>
+        )}
       </h2>
 
+      {result.master && (
+        <div
+          className="card"
+          style={{ marginBottom: 16, padding: "10px 12px", background: "rgba(37, 99, 235, 0.04)" }}
+        >
+          <h3 style={{ fontSize: 13, margin: "0 0 6px" }}>商品マスタ登録情報</h3>
+          <div style={{ fontSize: 13, display: "grid", gridTemplateColumns: "auto 1fr", rowGap: 4, columnGap: 10 }}>
+            {result.master.product_kana && (
+              <>
+                <span style={{ color: "var(--text-muted)" }}>カナ品名</span>
+                <span>{result.master.product_kana}</span>
+              </>
+            )}
+            <span style={{ color: "var(--text-muted)" }}>実仕入先</span>
+            <span>
+              {result.master.primary_supplier_name ?? (result.master.primary_supplier_code ? `コード:${result.master.primary_supplier_code}(仕入先マスタ未登録)` : "-")}
+              {result.master.primary_supplier_price !== null && ` / ${yen(result.master.primary_supplier_price)}`}
+            </span>
+            {(result.master.secondary_supplier_name || result.master.secondary_supplier_code) && (
+              <>
+                <span style={{ color: "var(--text-muted)" }}>副仕入先</span>
+                <span>
+                  {result.master.secondary_supplier_name ?? `コード:${result.master.secondary_supplier_code}(仕入先マスタ未登録)`}
+                  {result.master.secondary_supplier_price !== null && ` / ${yen(result.master.secondary_supplier_price)}`}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {result.masterMismatch && (
-        <p style={{ color: "var(--warning)", fontSize: 13, marginBottom: 12 }}>
-          ⚠ マスタ登録の仕入先と、実際の最安仕入先が異なります。
-        </p>
+        <p style={{ color: "var(--critical)", fontSize: 13, marginBottom: 12 }}>⚠ {result.masterMismatch}</p>
       )}
 
       {hasHistory ? (
@@ -176,8 +212,8 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
             </thead>
             <tbody>
               {result.latestBySupplier.map((s) => (
-                <tr key={s.supplier_code} style={{ background: isOld(s.purchase_date) ? "#fff3e0" : undefined }}>
-                  <td>{s.supplier_name ?? s.supplier_code}</td>
+                <tr key={s.supplier_name} style={{ background: isOld(s.purchase_date) ? "#fff3e0" : undefined }}>
+                  <td>{s.supplier_name}</td>
                   <td>{yen(s.unit_price)}</td>
                   <td>{s.purchase_date}</td>
                 </tr>
@@ -186,25 +222,7 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
           </table>
         </>
       ) : (
-        <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>
-          仕入実績がありません。以下はマスタ情報です。
-        </p>
-      )}
-
-      {result.master && (
-        <div style={{ fontSize: 13, marginBottom: 16 }}>
-          <h3 style={{ fontSize: 13, marginBottom: 6 }}>商品マスタ</h3>
-          <p>
-            実仕入先: {result.master.primary_supplier_name ?? result.master.primary_supplier_code ?? "-"}
-            (単価 {yen(result.master.primary_supplier_price)})
-          </p>
-          {result.master.secondary_supplier_code && (
-            <p>
-              副仕入先: {result.master.secondary_supplier_name ?? result.master.secondary_supplier_code}
-              (単価 {yen(result.master.secondary_supplier_price)})
-            </p>
-          )}
-        </div>
+        <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>仕入実績がありません。</p>
       )}
 
       {hasHistory && (
@@ -216,7 +234,6 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
                 <th>日付</th>
                 <th>仕入先</th>
                 <th>単価</th>
-                <th>仕様</th>
                 <th>伝票番号</th>
                 <th>得意先</th>
                 <th>売値</th>
@@ -230,9 +247,8 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
                   style={{ background: isOld(h.purchase_date) ? "#fff3e0" : undefined }}
                 >
                   <td>{h.purchase_date}</td>
-                  <td>{h.supplier_name ?? h.supplier_code ?? "-"}</td>
+                  <td>{h.supplier_name ?? "-"}</td>
                   <td>{yen(h.unit_price)}</td>
-                  <td>{h.spec ?? "-"}</td>
                   <td>{h.purchase_number}-{h.purchase_line}</td>
                   <td>{h.customer_name ?? "-"}</td>
                   <td>{yen(h.sell_price)}</td>
