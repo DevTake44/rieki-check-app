@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "値上げ検知ダッシュボード",
-  description: "仕入 値上げ検知ダッシュボード",
+  title: "統合DXダッシュボード",
+  description: "仕入・売上データの照合・分析ツール一式",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

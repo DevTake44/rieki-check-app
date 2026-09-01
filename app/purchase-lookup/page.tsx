@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 
 type SupplierPriceRow = {
   supplier_name: string;
@@ -83,7 +84,17 @@ export default function PurchaseLookupPage() {
 
   return (
     <div className="page">
-      <h1>仕入価格検索</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <h1>仕入価格検索</h1>
+        <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+          <Link href="/upload" className="ghost-btn" style={{ textDecoration: "none" }}>
+            データ更新
+          </Link>
+          <Link href="/menu" className="ghost-btn" style={{ textDecoration: "none" }}>
+            ← メニューに戻る
+          </Link>
+        </div>
+      </div>
       <p className="subtitle">
         品番の完全一致、または品名のキーワード(あいまい検索)で仕入実績を調べます。データはrieki-check自身が持つ直近の仕入・売上データ(保持期間内)のみが対象です。
       </p>
