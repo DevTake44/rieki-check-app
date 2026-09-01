@@ -15,6 +15,10 @@ type PurchaseHistoryRow = {
   spec: string | null;
   purchase_number: string;
   purchase_line: number;
+  customer_name: string | null;
+  sell_price: number | null;
+  delivery_note_no: string | null;
+  freight_amount: number | null;
 };
 type MasterInfo = {
   primary_supplier_code: string | null;
@@ -214,6 +218,9 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
                 <th>単価</th>
                 <th>仕様</th>
                 <th>伝票番号</th>
+                <th>得意先</th>
+                <th>売値</th>
+                <th>運賃(仕入)</th>
               </tr>
             </thead>
             <tbody>
@@ -227,6 +234,9 @@ function ProductCard({ result }: { result: ProductSearchResult }) {
                   <td>{yen(h.unit_price)}</td>
                   <td>{h.spec ?? "-"}</td>
                   <td>{h.purchase_number}-{h.purchase_line}</td>
+                  <td>{h.customer_name ?? "-"}</td>
+                  <td>{yen(h.sell_price)}</td>
+                  <td>{h.freight_amount !== null ? yen(h.freight_amount) : "-"}</td>
                 </tr>
               ))}
             </tbody>
