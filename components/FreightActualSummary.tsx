@@ -18,7 +18,7 @@ import { repLabel } from "@/lib/rep-names";
  * 既存の売上利益の計算(受注番号・売上行単位)にそのまま混ぜ込めないため。
  */
 
-type Dimension = "branch" | "rep" | "customer" | "carrier";
+type Dimension = "branch" | "rep" | "customer" | "carrier" | "source";
 
 function fmtYen(n: number): string {
   return `¥${Math.round(n).toLocaleString("ja-JP")}`;
@@ -70,9 +70,14 @@ export default function FreightActualSummary({ rows }: { rows: FreightActualSumm
       } else if (dimension === "customer") {
         key = `${r.customer_code}__${r.customer_name}`;
         label = customerLabel(r.customer_code, r.customer_name);
-      } else {
+      } else if (dimension === "carrier") {
         key = r.carrier;
         label = r.carrier;
+      } else {
+        // source: 請求元(拠点・契約)別。同じ運送会社(carrier)でも西濃(兵庫)・
+        // 西濃(土浦)のように別契約なら分けて見たい、という要望に対応(2026-09-02追加)。
+        key = `${r.carrier}__${r.source_label}`;
+        label = r.source_label || r.carrier;
       }
       let g = m.get(key);
       if (!g) {
@@ -166,6 +171,7 @@ export default function FreightActualSummary({ rows }: { rows: FreightActualSumm
                     ["rep", "営業担当別"],
                     ["customer", "得意先別"],
                     ["carrier", "運送会社別"],
+                    ["source", "請求元別"],
                   ] as [Dimension, string][]
                 ).map(([key, label]) => (
                   <button
@@ -211,7 +217,17 @@ export default function FreightActualSummary({ rows }: { rows: FreightActualSumm
               <table>
                 <thead>
                   <tr>
-                    <th>{dimension === "branch" ? "拠点" : dimension === "rep" ? "営業担当" : dimension === "customer" ? "得意先" : "運送会社"}</th>
+                    <th>
+                      {dimension === "branch"
+                        ? "拠点"
+                        : dimension === "rep"
+                        ? "営業担当"
+                        : dimension === "customer"
+                        ? "得意先"
+                        : dimension === "carrier"
+                        ? "運送会社"
+                        : "請求元"}
+                    </th>
                     <th className="num">件数</th>
                     <th className="num">実費運賃</th>
                     <th className="num">請求運賃</th>

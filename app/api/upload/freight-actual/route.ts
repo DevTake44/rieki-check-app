@@ -6,15 +6,22 @@ export const dynamic = "force-dynamic";
 // 運賃実績集計(freight_actual_summary)の保存。
 //
 // 運賃照合画面(FreightCheck)で「拠点/営業担当/得意先×20日締め期間」に集計した
-// 結果を、ここでまとめて保存する。同じ(period_end, carrier)の組み合わせを
+// 結果を、ここでまとめて保存する。同じ(period_end, carrier, source_label)の組み合わせを
 // 再アップロード(データの訂正など)した場合に二重計上しないよう、対象の
-// (period_end, carrier)にあたる既存行はいったん全部消してから入れ直す
+// (period_end, carrier, source_label)にあたる既存行はいったん全部消してから入れ直す
 // (shipping_note_mappingのような蓄積upsertではなく、全件洗い替え)。
+//
+// 2026-09-02追記: 当初はcarrierだけを洗い替えの単位にしていたが、西濃運輸(兵庫)・
+// 西濃運輸(土浦)のように同じCSV形式(＝同じcarrier値)でも別々の契約・請求書として
+// 別タイミングでアップロードされる運用があり、carrierだけだと後からアップロードした
+// 方が先の別拠点分を消してしまう不具合があった。そのため請求元(拠点・契約)を表す
+// source_labelを追加し、洗い替えの単位を(period_end, carrier, source_label)にした。
 const MAX_ROWS = 5000;
 
 type FreightActualSummaryInsertRow = {
   period_end: string;
   carrier: string;
+  source_label: string;
   branch_code: string;
   rep_code: string;
   customer_code: string;
@@ -57,22 +64,34 @@ export async function POST(req: NextRequest) {
     if (!r.carrier) {
       return NextResponse.json({ error: `carrier が空の行があります: ${JSON.stringify(r)}` }, { status: 400 });
     }
+    if (!r.source_label) {
+      return NextResponse.json(
+        { error: `請求元(source_label)が空の行があります。どの拠点・契約のデータか入力してください: ${JSON.stringify(r)}` },
+        { status: 400 }
+      );
+    }
   }
 
   const supabase = getSupabaseServerClient();
 
-  // 対象となる (period_end, carrier) の組み合わせを洗い出し、それぞれ既存行を削除する。
-  const targetPairs = Array.from(new Set(rows.map((r) => `${r.period_end}__${r.carrier}`))).map((k) => {
-    const idx = k.lastIndexOf("__");
-    return { period_end: k.slice(0, idx), carrier: k.slice(idx + 2) };
-  });
+  // 対象となる (period_end, carrier, source_label) の組み合わせを洗い出し、それぞれ既存行を削除する。
+  // 区切り文字には制御文字(\x01)を使う。period_end/carrier/source_labelの値に
+  // 現れない前提(ユーザーが入力するテキストとして通常出てこない想定)。
+  const SEP = "\x01";
+  const targetTriples = Array.from(new Set(rows.map((r) => `${r.period_end}${SEP}${r.carrier}${SEP}${r.source_label}`))).map(
+    (k) => {
+      const [period_end, carrier, source_label] = k.split(SEP);
+      return { period_end, carrier, source_label };
+    }
+  );
 
-  for (const { period_end, carrier } of targetPairs) {
+  for (const { period_end, carrier, source_label } of targetTriples) {
     const { error: deleteError } = await supabase
       .from("freight_actual_summary")
       .delete()
       .eq("period_end", period_end)
-      .eq("carrier", carrier);
+      .eq("carrier", carrier)
+      .eq("source_label", source_label);
     if (deleteError) {
       return NextResponse.json({ error: `既存データの削除に失敗しました: ${deleteError.message}` }, { status: 500 });
     }
@@ -86,5 +105,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `保存に失敗しました: ${insertError.message}` }, { status: 500 });
   }
 
-  return NextResponse.json({ inserted: rows.length, periods: targetPairs.length });
+  return NextResponse.json({ inserted: rows.length, periods: targetTriples.length });
 }

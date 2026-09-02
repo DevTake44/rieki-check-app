@@ -155,10 +155,20 @@ export type FreightSalesLine = {
 // 行(no_mapping)や売上データ自体が無かった行(no_sales_data)では特定できないため、
 // その場合は空文字列(""、NULLではない。UNIQUE制約でNULL同士が別行扱いになる問題を
 // 避けるため空文字列に統一している)で「不明」グループとして集計される。
+//
+// 2026-09-02追記(source_label): 西濃運輸(兵庫)・西濃運輸(土浦)のように、同じCSV列
+// 構成(＝同じcarrier値)でも実際には別々の契約・請求書として、別々のタイミングで
+// アップロードされることがある。carrierだけを洗い替え(削除→再挿入)の単位にすると、
+// 後から保存した方が先に保存した別拠点分のデータを消してしまう不具合があったため、
+// 「どの請求元(拠点・契約)のデータか」を表すsource_labelを追加し、洗い替え・
+// UNIQUE制約のキーに含めた(period_end, carrier, source_label, branch_code, rep_code,
+// customer_code, customer_nameの組み合わせで一意)。運賃照合画面のアップロード時に
+// ファイルごとに入力する。
 export type FreightActualSummaryRow = {
   id: number;
   period_end: string; // 20日締め期間の末日(例: "2025-12-20")
   carrier: string;
+  source_label: string; // 請求元(拠点・契約)ラベル。例: "西濃(兵庫)"、"西濃(土浦)"、"福通(土浦)"
   branch_code: string; // 不明の場合は ""
   rep_code: string; // 不明の場合は ""
   customer_code: string; // 不明の場合は ""
