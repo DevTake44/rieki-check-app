@@ -15,6 +15,21 @@ const nextConfig = {
       static: 180,
     },
   },
+  // 2026-09-02追加: /freight-actual-summary が、DBを更新した後もVercel/CDN側に
+  // 古いレスポンスがキャッシュされたままになり、再読み込みしても最新データに
+  // 反映されない事象が発生したための対策。force-dynamic・fetchのcache:"no-store"
+  // だけでは防げなかったため、HTTPレスポンス自体にNo-Cacheヘッダーを明示して、
+  // ブラウザ・CDN(Vercel Edge Network)どちらにもキャッシュさせないようにする。
+  async headers() {
+    return [
+      {
+        source: "/freight-actual-summary",
+        headers: [
+          { key: "Cache-Control", value: "no-store, no-cache, must-revalidate, max-age=0" },
+        ],
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

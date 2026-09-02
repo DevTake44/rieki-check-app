@@ -4,6 +4,10 @@ import FreightActualSummary from "@/components/FreightActualSummary";
 
 // Vercelのキャッシュに古い結果が残らないよう、毎回サーバーで実行する
 export const dynamic = "force-dynamic";
+// 2026-09-02追加: force-dynamicだけではVercel/CDN側にレスポンスがキャッシュされる
+// 事象が発生したため、念のためISR的なキャッシュも明示的に無効化しておく
+// (next.config.jsのheaders()でCache-Controlヘッダーも別途無効化済み)。
+export const revalidate = 0;
 
 // freight_actual_summaryは「20日締め期間×運送会社×拠点×営業×得意先」の集計行なので、
 // 生の明細(sales_lines等)と違って件数は少ない(運賃照合画面から手動保存されたものだけ)。
