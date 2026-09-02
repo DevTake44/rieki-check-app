@@ -142,3 +142,36 @@ export type FreightSalesLine = {
   assumed_cost: number | null;
   delivery_date: string | null;
 };
+
+// public.freight_actual_summary テーブルの1行の型(運賃実績集計・2026-09-02追加)
+//
+// 背景: 運賃照合(FreightCheck)は個々の送り状単位の突き合わせをその場で行うだけで
+// Supabaseには何も保存しない。拠点/営業担当/得意先別の利益計算に運賃の実費を
+// 反映させたいという要望を受け、運賃照合の結果を「20日締め期間×拠点/営業担当/
+// 得意先」単位に集計してこのテーブルへ保存できるようにした(保存は運賃照合画面
+// から手動で行う。自動集計・自動保存はしない)。
+//
+// branch_code・rep_code・customer_code・customer_name は、受注番号が判明しなかった
+// 行(no_mapping)や売上データ自体が無かった行(no_sales_data)では特定できないため、
+// その場合は空文字列(""、NULLではない。UNIQUE制約でNULL同士が別行扱いになる問題を
+// 避けるため空文字列に統一している)で「不明」グループとして集計される。
+export type FreightActualSummaryRow = {
+  id: number;
+  period_end: string; // 20日締め期間の末日(例: "2025-12-20")
+  carrier: string;
+  branch_code: string; // 不明の場合は ""
+  rep_code: string; // 不明の場合は ""
+  customer_code: string; // 不明の場合は ""
+  customer_name: string; // 不明の場合は ""
+  shipment_count: number;
+  matched_count: number;
+  no_freight_charge_count: number;
+  no_sales_data_count: number;
+  no_mapping_count: number;
+  actual_freight: number; // 実費運賃合計(全件)
+  charged_freight: number; // 得意先への請求運賃合計(matched・no_freight_chargeのみ)
+  margin: number; // charged_freight - (matched・no_freight_chargeぶんのactual_freight)
+  source_files: string | null;
+  created_at: string;
+  updated_at: string;
+};

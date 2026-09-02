@@ -128,7 +128,34 @@ type InvoiceLine = {
   // 西濃運輸(東京本社)のみ設定される。設定されている場合、送り状番号↔受注番号の
   // 対応表(shipping_note_mapping)を経由せず、この値をそのまま受注番号として使う。
   directOrderNo?: string;
+  // 2026-09-02追加(運賃実績集計): この行が属する20日締め期間の末日(YYYY-MM-DD)。
+  // 福山通運・西濃運輸(東京本社)は行ごとに実際の年月日が分かるので自動計算できるが、
+  // 西濃運輸(標準)は年が印字されないため自動計算できず、undefinedのままにする
+  // (アップロード後、ファイル単位でユーザーに締め日を手入力してもらう)。
+  periodEnd?: string;
 };
+
+// 20日締め期間の末日を計算する(21日以降は翌月20日、1〜20日はその月の20日)。
+// 例: 2025-11-21〜2025-12-20分は "2025-12-20"、2025-12-21〜2026-01-20分は "2026-01-20"。
+function computePeriodEnd(year: number, month: number, day: number): string {
+  let y = year;
+  let m = month;
+  if (day > 20) {
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return `${y}-${String(m).padStart(2, "0")}-20`;
+}
+
+// "YYYY/MM/DD" 形式の dateLabel(福山通運・西濃運輸(東京本社)が使う)から期間末日を計算する。
+function periodEndFromYmdLabel(dateLabel: string): string | undefined {
+  const m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(dateLabel);
+  if (!m) return undefined;
+  return computePeriodEnd(Number(m[1]), Number(m[2]), Number(m[3]));
+}
 
 type MatchStatus = "matched" | "no_mapping" | "no_freight_charge" | "no_sales_data";
 
@@ -139,6 +166,7 @@ type ResultRow = {
   dateLabel: string;
   deliveryLocation: string;
   orderNo: string | null;
+  customerCode: string | null;
   customerName: string | null;
   branchCode: string | null;
   repCode: string | null;
@@ -147,6 +175,10 @@ type ResultRow = {
   chargedFreight: number | null;
   margin: number | null;
   status: MatchStatus;
+  // 2026-09-02追加(運賃実績集計): この行が属する20日締め期間の末日。
+  // 西濃運輸(標準)はファイル単位でユーザーが手入力するまでnull。
+  periodEnd: string | null;
+  sourceFile: string;
 };
 
 type FileState = {
@@ -249,6 +281,7 @@ function parseFukuyamaRows(rows: string[][], fileName: string): InvoiceLine[] {
       deliveryLocation,
       note,
       sourceFile: fileName,
+      periodEnd: periodEndFromYmdLabel(dateLabel),
     });
   }
   return out;
@@ -288,6 +321,7 @@ function parseSeinoTokyoRows(rows: string[][], fileName: string): InvoiceLine[] 
       deliveryLocation,
       note,
       sourceFile: fileName,
+      periodEnd: periodEndFromYmdLabel(dateLabel),
     });
   }
   return out;
@@ -307,6 +341,16 @@ export default function FreightCheck({
   // 2026-08-27追加: 西濃運輸(東京本社)の「受注番号不明分」一覧で、FAX依頼シートに
   // 含めるためにチェックした行(ResultRow.key)の集合。
   const [selectedFaxKeys, setSelectedFaxKeys] = useState<Set<string>>(new Set());
+  // 2026-09-02追加(運賃実績集計): 西濃運輸(標準)は行ごとに年が分からないため、
+  // ファイル単位で締め日(20日締めの期間末日)をユーザーに手入力してもらう。
+  // キーはファイル名。福山通運・西濃運輸(東京本社)は行ごとに自動計算されるため不要。
+  const [seinoFilePeriodEnd, setSeinoFilePeriodEnd] = useState<Record<string, string>>({});
+  const [freightSaveState, setFreightSaveState] = useState<{
+    saving: boolean;
+    saved: boolean;
+    error: string | null;
+    savedCount: number | null;
+  }>({ saving: false, saved: false, error: null, savedCount: null });
 
   const mappingByWaybill = useMemo(() => {
     const m = new Map<string, ShippingNoteMappingRow>();
@@ -320,7 +364,13 @@ export default function FreightCheck({
   const orderInfoByOrder = useMemo(() => {
     const m = new Map<
       string,
-      { branchCode: string | null; repCode: string | null; deliveryNoteNo: string | null; customerName: string | null }
+      {
+        branchCode: string | null;
+        repCode: string | null;
+        deliveryNoteNo: string | null;
+        customerCode: string | null;
+        customerName: string | null;
+      }
     >();
     for (const l of freightSalesLines) {
       if (!l.order_no) continue;
@@ -329,6 +379,7 @@ export default function FreightCheck({
         branchCode: prev?.branchCode ?? l.branch_code,
         repCode: prev?.repCode ?? l.rep_code,
         deliveryNoteNo: prev?.deliveryNoteNo ?? l.delivery_note_no,
+        customerCode: prev?.customerCode ?? l.customer_code,
         customerName: prev?.customerName ?? l.customer_name,
       });
     }
@@ -348,6 +399,8 @@ export default function FreightCheck({
 
   async function handleFiles(files: FileList) {
     setFileState({ fileNames: [], loading: true, errors: [] });
+    setSeinoFilePeriodEnd({});
+    setFreightSaveState({ saving: false, saved: false, error: null, savedCount: null });
     const allLines: InvoiceLine[] = [];
     const errors: string[] = [];
     const fileNames: string[] = [];
@@ -397,6 +450,7 @@ export default function FreightCheck({
       const orderNo = line.directOrderNo ?? mapRow?.order_no ?? null;
       let status: MatchStatus;
       let chargedFreight: number | null = null;
+      let customerCode: string | null = null;
       let customerName: string | null = mapRow?.customer_name ?? null;
       let branchCode: string | null = null;
       let repCode: string | null = null;
@@ -413,6 +467,7 @@ export default function FreightCheck({
           branchCode = orderInfo.branchCode;
           repCode = orderInfo.repCode;
           deliveryNoteNo = orderInfo.deliveryNoteNo;
+          customerCode = orderInfo.customerCode;
           customerName = orderInfo.customerName ?? customerName;
         }
 
@@ -442,6 +497,12 @@ export default function FreightCheck({
         customerName = `${line.destinationName}(納品先)`;
       }
 
+      // 2026-09-02追加(運賃実績集計): 期間末日。福山通運・西濃運輸(東京本社)は
+      // 行ごとに自動計算済み(line.periodEnd)。西濃運輸(標準)はファイル単位の
+      // 手入力(seinoFilePeriodEnd)から引く。
+      const periodEnd =
+        line.carrier === "西濃運輸" ? seinoFilePeriodEnd[line.sourceFile] ?? null : line.periodEnd ?? null;
+
       return {
         key: `${line.carrier}-${line.waybillNo}-${i}`,
         carrier: line.carrier,
@@ -449,6 +510,7 @@ export default function FreightCheck({
         dateLabel: line.dateLabel,
         deliveryLocation: line.deliveryLocation,
         orderNo,
+        customerCode,
         customerName,
         branchCode,
         repCode,
@@ -457,9 +519,127 @@ export default function FreightCheck({
         chargedFreight,
         margin,
         status,
+        periodEnd,
+        sourceFile: line.sourceFile,
       };
     });
-  }, [invoiceLines, mappingByWaybill, orderInfoByOrder, freightByOrder]);
+  }, [invoiceLines, mappingByWaybill, orderInfoByOrder, freightByOrder, seinoFilePeriodEnd]);
+
+  // 西濃運輸(標準)のファイル一覧(締め日の手入力が必要なもの)。
+  const seinoFileNames = useMemo(() => {
+    return Array.from(new Set(invoiceLines.filter((l) => l.carrier === "西濃運輸").map((l) => l.sourceFile)));
+  }, [invoiceLines]);
+
+  // 2026-09-02追加(運賃実績集計): 20日締め期間×拠点/営業担当/得意先で集計する。
+  // 期間末日が未確定(西濃運輸で締め日を未入力)の行は集計対象から除外し、件数を別途返す。
+  const freightAggregation = useMemo(() => {
+    type Group = {
+      period_end: string;
+      carrier: string;
+      branch_code: string;
+      rep_code: string;
+      customer_code: string;
+      customer_name: string;
+      shipment_count: number;
+      matched_count: number;
+      no_freight_charge_count: number;
+      no_sales_data_count: number;
+      no_mapping_count: number;
+      actual_freight: number;
+      charged_freight: number;
+      margin: number;
+      source_files: Set<string>;
+    };
+    const groups = new Map<string, Group>();
+    let unresolvedPeriodCount = 0;
+
+    for (const r of results) {
+      if (!r.periodEnd) {
+        unresolvedPeriodCount++;
+        continue;
+      }
+      const branch = r.branchCode ?? "";
+      const rep = r.repCode ?? "";
+      const custCode = r.customerCode ?? "";
+      const custName = r.customerName ?? "";
+      const key = `${r.periodEnd}__${r.carrier}__${branch}__${rep}__${custCode}__${custName}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = {
+          period_end: r.periodEnd,
+          carrier: r.carrier,
+          branch_code: branch,
+          rep_code: rep,
+          customer_code: custCode,
+          customer_name: custName,
+          shipment_count: 0,
+          matched_count: 0,
+          no_freight_charge_count: 0,
+          no_sales_data_count: 0,
+          no_mapping_count: 0,
+          actual_freight: 0,
+          charged_freight: 0,
+          margin: 0,
+          source_files: new Set(),
+        };
+        groups.set(key, g);
+      }
+      g.shipment_count++;
+      g.actual_freight += r.actualFreight;
+      g.source_files.add(r.sourceFile);
+      if (r.status === "matched") g.matched_count++;
+      else if (r.status === "no_freight_charge") g.no_freight_charge_count++;
+      else if (r.status === "no_sales_data") g.no_sales_data_count++;
+      else g.no_mapping_count++;
+      // 請求運賃・利益は、金額が判明する行(matched・no_freight_charge)だけ合算する
+      // (画面上部のサマリーと同じ考え方。no_mapping/no_sales_dataは請求額不明のため含めない)。
+      if (r.status === "matched" || r.status === "no_freight_charge") {
+        g.charged_freight += r.chargedFreight ?? 0;
+        g.margin += r.margin ?? 0;
+      }
+    }
+
+    const rows = Array.from(groups.values())
+      .map((g) => ({
+        period_end: g.period_end,
+        carrier: g.carrier,
+        branch_code: g.branch_code,
+        rep_code: g.rep_code,
+        customer_code: g.customer_code,
+        customer_name: g.customer_name,
+        shipment_count: g.shipment_count,
+        matched_count: g.matched_count,
+        no_freight_charge_count: g.no_freight_charge_count,
+        no_sales_data_count: g.no_sales_data_count,
+        no_mapping_count: g.no_mapping_count,
+        actual_freight: Math.round(g.actual_freight),
+        charged_freight: Math.round(g.charged_freight),
+        margin: Math.round(g.margin),
+        source_files: Array.from(g.source_files).join(", "),
+      }))
+      .sort((a, b) => (a.period_end < b.period_end ? -1 : a.period_end > b.period_end ? 1 : 0));
+
+    return { rows, unresolvedPeriodCount };
+  }, [results]);
+
+  async function saveFreightAggregation() {
+    setFreightSaveState({ saving: true, saved: false, error: null, savedCount: null });
+    try {
+      const res = await fetch("/api/upload/freight-actual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: freightAggregation.rows }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFreightSaveState({ saving: false, saved: false, error: json.error ?? res.statusText, savedCount: null });
+        return;
+      }
+      setFreightSaveState({ saving: false, saved: true, error: null, savedCount: freightAggregation.rows.length });
+    } catch (e) {
+      setFreightSaveState({ saving: false, saved: false, error: String(e), savedCount: null });
+    }
+  }
 
   const summary = useMemo(() => {
     let totalActual = 0;
@@ -851,6 +1031,108 @@ export default function FreightCheck({
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <div className="card" style={{ marginBottom: 20 }}>
+            <h2 style={{ marginTop: 0 }}>運賃実績集計(拠点/営業担当/得意先 × 20日締め期間)</h2>
+            <p className="subtitle" style={{ margin: "0 0 8px" }}>
+              日次の明細ではなく、20日締め期間(例: 11/21〜12/20分を「2025-12-20」として扱う)ごとに拠点/営業担当/得意先で集計してから保存します。福山通運は10日締めですが、行ごとの実際の発送日から自動で20日締め期間に振り分けます(月をまたぐ請求は自動的に2期間に分かれます)。西濃運輸(標準)は行に年が印字されないため、下で締め日を指定してください。
+            </p>
+
+            {seinoFileNames.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 13, marginBottom: 6 }}>西濃運輸(標準)ファイルの締め日(20日締め期間の末日)</div>
+                {seinoFileNames.map((fname) => (
+                  <div key={fname} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13 }}>
+                    <span style={{ minWidth: 260, wordBreak: "break-all" }}>{fname}</span>
+                    <input
+                      type="date"
+                      value={seinoFilePeriodEnd[fname] ?? ""}
+                      onChange={(e) =>
+                        setSeinoFilePeriodEnd((prev) => ({ ...prev, [fname]: e.target.value }))
+                      }
+                      style={{ padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 4 }}
+                    />
+                    {!seinoFilePeriodEnd[fname] && (
+                      <span style={{ color: "var(--critical)" }}>未入力(このファイルの行は集計に含まれません)</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {freightAggregation.unresolvedPeriodCount > 0 && (
+              <p style={{ color: "var(--critical)", fontSize: 13, marginBottom: 8 }}>
+                締め日未確定のため{freightAggregation.unresolvedPeriodCount.toLocaleString("ja-JP")}件が集計から除外されています。上の締め日を入力してください。
+              </p>
+            )}
+
+            <p style={{ fontSize: 13, marginBottom: 8 }}>
+              集計結果: {freightAggregation.rows.length.toLocaleString("ja-JP")}グループ(期間×運送会社×拠点×営業×得意先)
+            </p>
+
+            {freightAggregation.rows.length > 0 && (
+              <div className="table-scroll" style={{ marginBottom: 12 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>期間(締め日)</th>
+                      <th>運送会社</th>
+                      <th>拠点</th>
+                      <th>営業担当</th>
+                      <th>得意先</th>
+                      <th className="num">件数</th>
+                      <th className="num">実費運賃</th>
+                      <th className="num">請求運賃</th>
+                      <th className="num">利益</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {freightAggregation.rows.map((g, i) => (
+                      <tr key={i}>
+                        <td>{g.period_end}</td>
+                        <td>{g.carrier}</td>
+                        <td>{g.branch_code || "不明"}</td>
+                        <td>{g.rep_code || "不明"}</td>
+                        <td>{g.customer_name || "不明"}</td>
+                        <td className="num">{g.shipment_count.toLocaleString("ja-JP")}</td>
+                        <td className="num">{fmtYen(g.actual_freight)}</td>
+                        <td className="num">{fmtYen(g.charged_freight)}</td>
+                        <td className="num" style={{ color: g.margin < 0 ? "var(--critical)" : undefined }}>
+                          {fmtYen(g.margin)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <button
+              onClick={saveFreightAggregation}
+              disabled={freightAggregation.rows.length === 0 || freightSaveState.saving}
+              style={{
+                padding: "8px 20px",
+                borderRadius: 6,
+                border: "1px solid var(--direct)",
+                background: freightAggregation.rows.length === 0 || freightSaveState.saving ? "#c3d6f8" : "var(--direct)",
+                color: "#fff",
+                cursor: freightAggregation.rows.length === 0 || freightSaveState.saving ? "not-allowed" : "pointer",
+              }}
+            >
+              {freightSaveState.saving ? "保存中…" : "この集計をDBに保存(拠点/営業/得意先別の利益計算用)"}
+            </button>
+            <p className="cell-sub" style={{ marginTop: 6 }}>
+              同じ期間×運送会社の組み合わせを再保存すると、その分は上書き(洗い替え)されます。
+            </p>
+            {freightSaveState.saved && (
+              <p style={{ color: "var(--good)", marginTop: 6 }}>
+                保存しました({freightSaveState.savedCount?.toLocaleString("ja-JP")}グループ)。
+              </p>
+            )}
+            {freightSaveState.error && (
+              <p style={{ color: "var(--critical)", marginTop: 6 }}>保存に失敗しました: {freightSaveState.error}</p>
+            )}
           </div>
 
           {seinoTokyoUnknown.length > 0 && (

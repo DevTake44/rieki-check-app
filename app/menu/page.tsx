@@ -67,6 +67,12 @@ const TOOLS: ToolLink[] = [
     category: "CSV照合ツール",
   },
   {
+    href: "/freight-actual-summary",
+    title: "運賃実績集計",
+    description: "運賃照合画面で保存した20日締め期間ごとの運賃実費・請求額・利益を、拠点別・営業担当別・得意先別に確認します。",
+    category: "ダッシュボード",
+  },
+  {
     href: "/receivables-report",
     title: "売掛残高月報",
     description: "拠点別の売掛残高CSVから、当月売上・消費税・入金額・当月残高の集計と、借方売掛金／貸方商品売上・仮受消費税の簡易仕訳を自動作成します。複数拠点をまとめると全社合計も表示します。",
