@@ -185,3 +185,50 @@ export type FreightActualSummaryRow = {
   created_at: string;
   updated_at: string;
 };
+
+// public.profit_summary テーブルの1行の型(拠点・営業担当・得意先別 利益集計・2026-09-03追加)
+//
+// 背景: 従来の売上利益ダッシュボード(/profit、v_profit_by_order)の「利益」は
+// 売上総利益(revenue - cost、いわゆる粗利)止まりで、運賃の実費(freight_actual_summary、
+// Seino請求データを取り込んで判明するようになった実費)が反映されていなかった。
+// ユーザーの要望は「運賃の利益(運賃の請求額と実費の差)を見たいのではなく、
+// 運賃の実費も引いた後の本当の利益・粗利率が見たい」というもの。
+// そのため、v_profit_lines(売上行単位、原価ロジックは在庫/メーカー直送/運賃行の
+// 出所を区別した既存の正しいものを踏襲)を「20日締め期間×拠点×営業担当×得意先」に
+// 集計したうえで、同じ期間・拠点・営業担当・得意先のfreight_actual_summaryの
+// 実費運賃(actual_freight)を差し引いた最終利益(final_profit)まで持たせた
+// 事前集計テーブル。
+//
+// gross_profit = revenue - cost (従来の「売上利益」概念、変更なし)
+// final_profit = gross_profit - freight_actual (ユーザーが本当に見たい「利益」)
+// gross_margin_pct / final_margin_pct は revenue=0 のときは null (0除算を避けるため、
+// DB側で計算済み。フロント側で複数行を合算するときも、%だけを平均するのではなく
+// 必ず合計後の実額から再計算すること)。
+//
+// branch_code は、送り状↔受注番号のマッピングが取れず売上側の拠点/営業担当/得意先が
+// 特定できなかった「運賃だけの孤立行」(freight-only orphan row。2026-09時点で全21,399行中
+// 3,303行)では ""(不明。NULLではない。freight_actual_summaryと同じ理由でUNIQUE制約上
+// NULL同士を区別するため)になる。この場合 revenue/cost/gross_profit は0で、
+// final_profitは freight_actual をそのまま差し引いたマイナス値になる
+// (=請求先が特定できない運賃コストがある、という意味)。
+// rep_code・customer_code・customer_nameは現時点でNOT NULL制約が無いためNULLもあり得る
+// (branch_codeほど厳密に""に統一されている保証がない)。画面側ではNULLと""の両方を
+// 「不明」として同じに扱うこと(FreightActualSummary.tsxのcustomerLabel()と同じ考え方)。
+export type ProfitSummaryRow = {
+  id: number;
+  period_end: string; // 20日締め期間の末日(例: "2026-06-20")
+  branch_code: string; // 不明(運賃だけの孤立行)の場合は ""。それ以外は必ず実コード
+  rep_code: string | null;
+  customer_code: string | null;
+  customer_name: string | null;
+  revenue: number;
+  cost: number;
+  gross_profit: number; // revenue - cost (従来の「売上利益」)
+  gross_margin_pct: number | null; // gross_profit/revenue*100、小数2桁。revenue=0ならnull
+  freight_actual: number; // 実費運賃合計(freight_actual_summary.actual_freightの合算)
+  final_profit: number; // gross_profit - freight_actual (ユーザーが見たい「利益」)
+  final_margin_pct: number | null; // final_profit/revenue*100、小数2桁。revenue=0ならnull
+  line_count: number; // この行に集計されたv_profit_lines側の明細行数
+  created_at: string;
+  updated_at: string;
+};

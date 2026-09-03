@@ -73,6 +73,12 @@ const TOOLS: ToolLink[] = [
     category: "ダッシュボード",
   },
   {
+    href: "/profit-summary",
+    title: "拠点・営業・得意先 利益",
+    description: "売上・原価から運賃の実費まで差し引いた最終利益・最終粗利率を、拠点別・営業担当別・得意先別に確認します。",
+    category: "ダッシュボード",
+  },
+  {
     href: "/receivables-report",
     title: "売掛残高月報",
     description: "拠点別の売掛残高CSVから、当月売上・消費税・入金額・当月残高の集計と、借方売掛金／貸方商品売上・仮受消費税の簡易仕訳を自動作成します。複数拠点をまとめると全社合計も表示します。",

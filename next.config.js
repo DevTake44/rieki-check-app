@@ -28,6 +28,14 @@ const nextConfig = {
           { key: "Cache-Control", value: "no-store, no-cache, must-revalidate, max-age=0" },
         ],
       },
+      // 2026-09-03追加: /profit-summary(拠点・営業・得意先 利益)も同じ理由で
+      // Cache-Controlを明示的に無効化する。
+      {
+        source: "/profit-summary",
+        headers: [
+          { key: "Cache-Control", value: "no-store, no-cache, must-revalidate, max-age=0" },
+        ],
+      },
     ];
   },
 };
