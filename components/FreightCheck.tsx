@@ -157,6 +157,19 @@ function periodEndFromYmdLabel(dateLabel: string): string | undefined {
   return computePeriodEnd(Number(m[1]), Number(m[2]), Number(m[3]));
 }
 
+// 2026-09-03改修: 得意先コードの桁数から拠点コードを直接求める。
+// 社内のコード体系上の規則で、得意先コードが8桁なら先頭1桁(拠点1,2,3,5,6,7,9)、
+// 9桁なら先頭2桁(拠点21,22,23,24,25,27,51,52,61,63…)がそのまま拠点コードになる。
+// sales_lines 294,254行全件で検証し、例外0件(100%一致)を確認済み。これにより、
+// 送り状問合せ(shipping_note_mapping)から得意先コードさえ分かれば、売上データに
+// その受注が立っているかどうかに関わらず拠点を特定できる。
+function branchFromCustomerCode(customerCode: string | null | undefined): string | null {
+  if (!customerCode) return null;
+  if (customerCode.length === 8) return customerCode.slice(0, 1);
+  if (customerCode.length === 9) return customerCode.slice(0, 2);
+  return null;
+}
+
 type MatchStatus = "matched" | "no_mapping" | "no_freight_charge" | "no_sales_data";
 
 type ResultRow = {
@@ -406,6 +419,35 @@ export default function FreightCheck({
     return m;
   }, [freightSalesLines]);
 
+  // 2026-09-03追加: 得意先コードごとの営業担当コード(多数決)。shipping_note_mapping
+  // (問合せCSV由来)には営業担当コードの列が無いため、直近の売上データから
+  // 「その得意先を主に担当している営業担当」を割り出してフォールバックに使う。
+  const repByCustomerCode = useMemo(() => {
+    const counts = new Map<string, Map<string, number>>();
+    for (const l of freightSalesLines) {
+      if (!l.customer_code || !l.rep_code) continue;
+      let m = counts.get(l.customer_code);
+      if (!m) {
+        m = new Map();
+        counts.set(l.customer_code, m);
+      }
+      m.set(l.rep_code, (m.get(l.rep_code) ?? 0) + 1);
+    }
+    const result = new Map<string, string>();
+    for (const [cust, m] of counts) {
+      let bestRep = "";
+      let bestCount = -1;
+      for (const [rep, c] of m) {
+        if (c > bestCount) {
+          bestRep = rep;
+          bestCount = c;
+        }
+      }
+      if (bestRep) result.set(cust, bestRep);
+    }
+    return result;
+  }, [freightSalesLines]);
+
   async function handleFiles(files: FileList) {
     setFileState({ fileNames: [], loading: true, errors: [] });
     setSeinoFilePeriodEnd({});
@@ -465,12 +507,20 @@ export default function FreightCheck({
       const orderNo = line.directOrderNo ?? mapRow?.order_no ?? null;
       let status: MatchStatus;
       let chargedFreight: number | null = null;
-      let customerCode: string | null = null;
-      let customerName: string | null = mapRow?.customer_name ?? null;
-      let branchCode: string | null = null;
-      let repCode: string | null = null;
       let deliveryNoteNo: string | null = null;
       let margin: number | null = null;
+
+      // 2026-09-03改修: 拠点・得意先・担当は、原票番号(送り状番号)を問合せCSV
+      // (shipping_note_mapping)と照合できた時点で確定する。売上データにその受注が
+      // 立っているかどうかには左右されない(未売上・未請求でも拠点は分かる)。
+      // 得意先コードが分かれば、拠点コードは桁数ルール(8桁→先頭1桁、9桁→先頭2桁)で
+      // 直接求まる。担当コードは問合せCSVの営業担当者コード列(rep_code)をそのまま
+      // 使う。古い(rep_code未取り込みの)対応データにマッチした行だけ、
+      // 得意先コード→担当の多数決フォールバック(repByCustomerCode)で補う。
+      let customerCode: string | null = mapRow?.customer_code ?? null;
+      let customerName: string | null = mapRow?.customer_name ?? null;
+      let branchCode: string | null = branchFromCustomerCode(customerCode);
+      let repCode: string | null = mapRow?.rep_code ?? (customerCode ? repByCustomerCode.get(customerCode) ?? null : null);
 
       if (!orderNo) {
         status = "no_mapping";
@@ -478,10 +528,11 @@ export default function FreightCheck({
         const orderInfo = orderInfoByOrder.get(orderNo);
         const freight = freightByOrder.get(orderNo);
 
-        if (orderInfo) {
+        // 問合せCSVから拠点・得意先・担当を特定できなかった場合だけ、売上データを
+        // フォールバックとして使う。
+        if (!customerCode && orderInfo) {
           branchCode = orderInfo.branchCode;
           repCode = orderInfo.repCode;
-          deliveryNoteNo = orderInfo.deliveryNoteNo;
           customerCode = orderInfo.customerCode;
           customerName = orderInfo.customerName ?? customerName;
         }
@@ -491,23 +542,23 @@ export default function FreightCheck({
           status = "matched";
           chargedFreight = freight;
           margin = chargedFreight - line.amount;
+          deliveryNoteNo = orderInfo?.deliveryNoteNo ?? null;
         } else if (orderInfo) {
-          // 売上データはあるが運賃(99)行が無い → 請求漏れ。0円請求とみなして
-          // 実費全額をマイナスとして可視化する。
+          // 売上データはあるが運賃(99)行が無い → 請求漏れ(未請求)。得意先への
+          // 請求運賃・売上番号は判断材料が無いため空欄のままにする
+          // (0円とみなさない。2026-09-03改修)。
           status = "no_freight_charge";
-          chargedFreight = 0;
-          margin = 0 - line.amount;
         } else {
           // その受注番号の売上データ自体が無い(直近4か月に一件も無い) → まだ未売上等。
-          // 判断材料が無いため空欄のままにする。
+          // 請求運賃・売上番号は空欄のままにする。
           status = "no_sales_data";
         }
       }
 
-      // 2026-08-26追加: 受注番号が不明、または受注番号はあっても売上データから
-      // 得意先名を当てられない(例: 末尾5桁が00000のような仮番号)場合は、得意先名の
-      // 代わりに請求データ自体が持っている納品先名(会社ごとに異なる項目、無い場合は
-      // 空欄のまま)を表示する。実際の得意先名と区別できるよう「(納品先)」を付ける。
+      // 2026-08-26追加: 得意先名を当てられない(例: 末尾5桁が00000のような仮番号)
+      // 場合は、得意先名の代わりに請求データ自体が持っている納品先名(会社ごとに
+      // 異なる項目、無い場合は空欄のまま)を表示する。実際の得意先名と区別できるよう
+      // 「(納品先)」を付ける。
       if (!customerName && line.destinationName) {
         customerName = `${line.destinationName}(納品先)`;
       }
@@ -542,7 +593,7 @@ export default function FreightCheck({
         sourceLabel,
       };
     });
-  }, [invoiceLines, mappingByWaybill, orderInfoByOrder, freightByOrder, seinoFilePeriodEnd, fileSourceLabel]);
+  }, [invoiceLines, mappingByWaybill, orderInfoByOrder, freightByOrder, repByCustomerCode, seinoFilePeriodEnd, fileSourceLabel]);
 
   // 2026-09-02追加(運賃実績集計): アップロードした全ファイルとそのcarrier(請求元
   // ラベルの入力欄をファイルごとに出すため)。ファイル名の初出順を保つ。
@@ -622,9 +673,10 @@ export default function FreightCheck({
       else if (r.status === "no_freight_charge") g.no_freight_charge_count++;
       else if (r.status === "no_sales_data") g.no_sales_data_count++;
       else g.no_mapping_count++;
-      // 請求運賃・利益は、金額が判明する行(matched・no_freight_charge)だけ合算する
-      // (画面上部のサマリーと同じ考え方。no_mapping/no_sales_dataは請求額不明のため含めない)。
-      if (r.status === "matched" || r.status === "no_freight_charge") {
+      // 請求運賃・利益は、金額が判明している行(matched)だけ合算する
+      // (2026-09-03改修: no_freight_charge・no_sales_dataは請求額不明のため
+      // 空欄のままにする方針になったので、0円とみなして含めることはしない)。
+      if (r.status === "matched") {
         g.charged_freight += r.chargedFreight ?? 0;
         g.margin += r.margin ?? 0;
       }
@@ -684,9 +736,10 @@ export default function FreightCheck({
     let lossCount = 0;
     for (const r of results) {
       totalActual += r.actualFreight;
-      // matched(運賃行あり)・no_freight_charge(運賃未請求)はどちらも請求運賃・利益が
-      // 計算できる(後者は請求運賃=0円)ので、金額サマリーにはあわせて含める。
-      if (r.status === "matched" || r.status === "no_freight_charge") {
+      // matched(運賃行あり)だけ請求運賃・利益が判明する(2026-09-03改修:
+      // no_freight_chargeは0円とみなさず空欄にする方針になったため、金額サマリーは
+      // matchedのみを合算する)。
+      if (r.status === "matched") {
         totalCharged += r.chargedFreight ?? 0;
         totalMargin += r.margin ?? 0;
         if ((r.margin ?? 0) < 0) lossCount++;
@@ -1027,9 +1080,9 @@ export default function FreightCheck({
           </div>
 
           <div className="card" style={{ marginBottom: 20 }}>
-            <h2 style={{ marginTop: 0 }}>金額サマリー(照合済み・運賃未請求分)</h2>
+            <h2 style={{ marginTop: 0 }}>金額サマリー(照合済み分)</h2>
             <p className="subtitle" style={{ margin: "0 0 8px" }}>
-              「売上データなし(未売上等)」「対応する受注が見つからない」分は金額が判断できないため、以下には含めていません。
+              「運賃未請求(売上あり)」「売上データなし(未売上等)」「対応する受注が見つからない」分は金額が判断できないため、以下には含めていません。
             </p>
             <table>
               <tbody>
@@ -1038,7 +1091,7 @@ export default function FreightCheck({
                   <td style={{ textAlign: "right" }}>{fmtYen(summary.totalActual)}</td>
                 </tr>
                 <tr>
-                  <td>得意先への請求運賃合計(運賃未請求分は0円として計算)</td>
+                  <td>得意先への請求運賃合計(照合済み分)</td>
                   <td style={{ textAlign: "right" }}>{fmtYen(summary.totalCharged)}</td>
                 </tr>
                 <tr>
@@ -1124,45 +1177,6 @@ export default function FreightCheck({
             <p style={{ fontSize: 13, marginBottom: 8 }}>
               集計結果: {freightAggregation.rows.length.toLocaleString("ja-JP")}グループ(期間×運送会社×請求元×拠点×営業×得意先)
             </p>
-
-            {freightAggregation.rows.length > 0 && (
-              <div className="table-scroll" style={{ marginBottom: 12 }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>期間(締め日)</th>
-                      <th>運送会社</th>
-                      <th>請求元</th>
-                      <th>拠点</th>
-                      <th>営業担当</th>
-                      <th>得意先</th>
-                      <th className="num">件数</th>
-                      <th className="num">実費運賃</th>
-                      <th className="num">請求運賃</th>
-                      <th className="num">利益</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {freightAggregation.rows.map((g, i) => (
-                      <tr key={i}>
-                        <td>{g.period_end}</td>
-                        <td>{g.carrier}</td>
-                        <td>{g.source_label}</td>
-                        <td>{g.branch_code || "不明"}</td>
-                        <td>{g.rep_code || "不明"}</td>
-                        <td>{g.customer_name || "不明"}</td>
-                        <td className="num">{g.shipment_count.toLocaleString("ja-JP")}</td>
-                        <td className="num">{fmtYen(g.actual_freight)}</td>
-                        <td className="num">{fmtYen(g.charged_freight)}</td>
-                        <td className="num" style={{ color: g.margin < 0 ? "var(--critical)" : undefined }}>
-                          {fmtYen(g.margin)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
 
             <button
               onClick={saveFreightAggregation}

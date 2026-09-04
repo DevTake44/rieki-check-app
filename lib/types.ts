@@ -115,6 +115,9 @@ export type ShippingNoteMappingRow = {
   carrier_name: string | null;
   customer_code: string | null;
   customer_name: string | null;
+  // 2026-09-03追加: 営業担当者コード。運賃照合(FreightCheck)の拠点・得意先・担当の
+  // 特定を、売上データとの照合に頼らず問合せCSV側だけで完結させるために追加。
+  rep_code: string | null;
   issue_date: string | null;
   created_at: string;
 };

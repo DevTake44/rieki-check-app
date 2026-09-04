@@ -299,6 +299,9 @@ export type ShippingNoteRowInsert = {
   carrier_name: string | null;
   customer_code: string | null;
   customer_name: string | null;
+  // 2026-09-03追加: 営業担当者コード(5列目)。運賃照合(FreightCheck)で、
+  // 拠点・得意先だけでなく担当も問合せCSV側から直接特定できるようにするため追加。
+  rep_code: string | null;
   issue_date: string | null;
 };
 
@@ -320,6 +323,7 @@ export function mapShippingNoteRow(cols: string[]): ShippingNoteRowInsert | null
     carrier_name: textOrNull(cols, 8),
     customer_code: textOrNull(cols, 0),
     customer_name: textOrNull(cols, 1),
+    rep_code: textOrNull(cols, 5),
     issue_date: dateOrNull(cols, 10),
   };
 }
