@@ -229,6 +229,8 @@ export default function ProfitDashboard({
   matrixLines,
   matrixLinesLoading,
   matrixLinesError,
+  matrixLinesLoadedCount,
+  matrixLinesTotal,
   onRetryMatrixLines,
 }: {
   orders: ProfitOrder[];
@@ -244,6 +246,10 @@ export default function ProfitDashboard({
   matrixLines: ProfitLine[] | null;
   matrixLinesLoading?: boolean;
   matrixLinesError?: string | null;
+  // 2026-09-04追加: 経営マトリクスの読み込み進捗(件数)。無ければ従来通り
+  // 固定文言のみ表示する(オプショナルなので古い呼び出し元があっても壊れない)。
+  matrixLinesLoadedCount?: number;
+  matrixLinesTotal?: number | null;
   onRetryMatrixLines?: () => void;
 }) {
   const maxOrderDate = useMemo(() => {
@@ -819,7 +825,20 @@ export default function ProfitDashboard({
             )}
           </div>
         ) : matrixLines === null ? (
-          <p className="empty-state">経営マトリクスを読み込み中…</p>
+          <p className="empty-state">
+            経営マトリクスを読み込み中…
+            {/* 2026-09-04追加: 進捗件数が全く出ないと「止まっている」ように見えて
+                途中で再読み込みされ、いつまで経っても終わらない不具合の原因になって
+                いたため、件数が分かる場合は表示する(表示中も裏では通信が進んでいる
+                ことが分かるように)。 */}
+            {!!matrixLinesTotal && (
+              <>
+                {" "}
+                ({(matrixLinesLoadedCount ?? 0).toLocaleString("ja-JP")} / {matrixLinesTotal.toLocaleString("ja-JP")}
+                件。途中で再読み込みすると最初からやり直しになるため、そのままお待ちください)
+              </>
+            )}
+          </p>
         ) : currentFYStart === undefined ? (
           <p className="empty-state">データがありません</p>
         ) : (

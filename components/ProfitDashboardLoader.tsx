@@ -149,6 +149,14 @@ export default function ProfitDashboardLoader() {
   const [matrixLines, setMatrixLines] = useState<ProfitLine[] | null>(null);
   const [matrixLinesLoading, setMatrixLinesLoading] = useState(false);
   const [matrixLinesError, setMatrixLinesError] = useState<string | null>(null);
+  // 2026-09-04追加: 経営マトリクスの読み込み中、進捗件数が全く表示されず
+  // 「読み込み中…」の固定文言だけだったため、実際には正常に進んでいても
+  // 止まっているように見えてしまい、途中で再読み込みされて最初からやり直しに
+  // なる、という悪循環が起きていた(Supabaseのアクセスログで、1回目のチャンクが
+  // 一瞬で成功した直後にリクエストが途切れるパターンを複数回確認)。受注データ側
+  // (loadedCount/total)と同じように進捗を表示できるようにする。
+  const [matrixLinesLoadedCount, setMatrixLinesLoadedCount] = useState(0);
+  const [matrixLinesTotal, setMatrixLinesTotal] = useState<number | null>(null);
 
   const startedRef = useRef(false);
   const cancelledRef = useRef(false);
@@ -278,6 +286,8 @@ export default function ProfitDashboardLoader() {
 
     setMatrixLinesLoading(true);
     setMatrixLinesError(null);
+    setMatrixLinesLoadedCount(0);
+    setMatrixLinesTotal(null);
 
     const first = await fetchChunk<ProfitLine>(
       `/api/profit-lines?since=${since}&offset=0&limit=${LINES_CHUNK_SIZE}`,
@@ -293,6 +303,8 @@ export default function ProfitDashboardLoader() {
     const firstTotal = first.total;
     const actualPageSize = first.rows.length;
     const collected: ProfitLine[] = [...first.rows];
+    setMatrixLinesTotal(firstTotal);
+    setMatrixLinesLoadedCount(collected.length);
 
     if (actualPageSize > 0 && collected.length < firstTotal) {
       const remainingOffsets: number[] = [];
@@ -315,6 +327,7 @@ export default function ProfitDashboardLoader() {
           }
           collected.push(...r.rows);
         }
+        setMatrixLinesLoadedCount(collected.length);
       }
     }
 
@@ -332,6 +345,7 @@ export default function ProfitDashboardLoader() {
       }
       if (r.rows.length === 0) break;
       collected.push(...r.rows);
+      setMatrixLinesLoadedCount(collected.length);
       gapFillRounds++;
     }
 
@@ -442,6 +456,8 @@ export default function ProfitDashboardLoader() {
       matrixLines={matrixLines}
       matrixLinesLoading={matrixLinesLoading}
       matrixLinesError={matrixLinesError}
+      matrixLinesLoadedCount={matrixLinesLoadedCount}
+      matrixLinesTotal={matrixLinesTotal}
       onRetryMatrixLines={() => runLoadMatrixLines(orders, true)}
     />
   );
