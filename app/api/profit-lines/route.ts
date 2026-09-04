@@ -18,8 +18,14 @@ export const maxDuration = 30;
 // Vercel Functionsのレスポンスサイズ上限(4.5MB)を超える恐れがあるため、
 // 1回あたり最大MAX_LIMIT件までとし、呼び出し側がoffsetをずらしながら
 // 何回かに分けて呼び出す。
-const MAX_LIMIT = 5000;
-const DEFAULT_LIMIT = 5000;
+//
+// 2026-09-04変更(5000→10000): 呼び出し側(ProfitDashboardLoader.tsxの
+// LINES_CHUNK_SIZE)と合わせて引き上げ。データが29万行を超え、5,000件/回だと
+// 全件取得に約59回の往復が必要で経営マトリクスの読み込みが止まって見える
+// 不具合が起きていたため。10,000件分のJSONサイズは実測で約1.9MBで、上限
+// 4.5MBに対して余裕がある。
+const MAX_LIMIT = 10000;
+const DEFAULT_LIMIT = 10000;
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
