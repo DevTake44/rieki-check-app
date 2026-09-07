@@ -1,4 +1,4 @@
-import type { ProfitOrder, ProfitLine } from "@/lib/types";
+import type { ProfitOrder, ProfitLine, ProfitSummaryRow } from "@/lib/types";
 
 /**
  * 売上利益ダッシュボードのブラウザ内キャッシュ(2026-08-27追加)
@@ -43,6 +43,7 @@ export function setProfitCache(orders: ProfitOrder[]): void {
 export function clearProfitCache(): void {
   cache = null;
   clearProfitLinesCache();
+  clearProfitSummaryCache();
 }
 
 /**
@@ -51,6 +52,12 @@ export function clearProfitCache(): void {
  * 変わるため、sinceも一緒に覚えておき、次に必要なsinceと一致する場合だけ使う
  * (前期データが新たにアップロードされてsinceが古くなった場合などに、
  * 古い範囲のキャッシュを誤って使い回さないため)。
+ *
+ * 2026-09-07時点: 経営マトリクスの読み込み元は下のprofit_summaryベースの
+ * キャッシュ(getProfitSummaryCache等)に切り替わっており、この関数群自体は
+ * 呼び出し元が無くなっている。/api/profit-lines・ProfitLine型は将来また
+ * 行単位データが必要になった場合のために残してあるだけなので、ここも
+ * 削除はせず残してある(実害はない)。
  */
 type ProfitLinesCacheEntry = {
   since: string;
@@ -70,4 +77,34 @@ export function setProfitLinesCache(since: string, lines: ProfitLine[]): void {
 
 export function clearProfitLinesCache(): void {
   linesCache = null;
+}
+
+/**
+ * 経営マトリクス(月別集計)専用データのキャッシュ(2026-09-07変更)。
+ *
+ * 背景: 経営マトリクスは従来v_profit_lines(明細行、件数が増え続ける。2026-09時点で
+ * 295,591行)を毎回全件ページング取得して画面側で月別集計していたため、データが
+ * 増えるほど開くのが遅くなる問題があった。事前集計テーブルprofit_summary(期間×
+ * 拠点×営業担当×得意先の粒度、2026-09時点で19,945行と明細より桁違いに少なく、
+ * 今後もアップロード件数ではなく組み合わせ数でしか増えないため増加が緩やか)に
+ * 読み込み元を切り替えた。全期間分をまとめて取得しても十分小さいため、行単位版
+ * (上のProfitLinesCacheEntry)と違ってsinceによる絞り込み・出し分けは不要にした。
+ */
+type ProfitSummaryCacheEntry = {
+  rows: ProfitSummaryRow[];
+  loadedAt: number;
+};
+
+let summaryCache: ProfitSummaryCacheEntry | null = null;
+
+export function getProfitSummaryCache(): ProfitSummaryCacheEntry | null {
+  return summaryCache;
+}
+
+export function setProfitSummaryCache(rows: ProfitSummaryRow[]): void {
+  summaryCache = { rows, loadedAt: Date.now() };
+}
+
+export function clearProfitSummaryCache(): void {
+  summaryCache = null;
 }

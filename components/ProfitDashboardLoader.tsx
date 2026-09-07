@@ -2,15 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import ProfitDashboard from "./ProfitDashboard";
-import type { ProfitOrder, ProfitLine } from "@/lib/types";
+import type { ProfitOrder, ProfitSummaryRow } from "@/lib/types";
 import {
   getProfitCache,
   setProfitCache,
-  getProfitLinesCache,
-  setProfitLinesCache,
-  clearProfitLinesCache,
+  getProfitSummaryCache,
+  setProfitSummaryCache,
+  clearProfitSummaryCache,
 } from "@/lib/profit-cache";
-import { periodKeyFor, fiscalYearStartOf, fiscalYearRangeFor } from "@/lib/period";
 
 // v_profit_by_order の全件(8万8千件超、2026-08時点)をサーバー側で1回のレスポンスに
 // 詰めるとJSONで約30MBになり、Vercel Functionsのレスポンスサイズ上限(4.5MB)を超えて
@@ -20,18 +19,17 @@ import { periodKeyFor, fiscalYearStartOf, fiscalYearRangeFor } from "@/lib/perio
 const REQUESTED_CHUNK_SIZE = 3000;
 const CONCURRENCY = 4;
 
-// 経営マトリクス(月別集計)専用データ(/api/profit-lines)のチャンクサイズ。
-// 1行あたりのフィールド数がordersより少ないため、少し大きめでも安全。
+// 経営マトリクス(月別集計)専用データのチャンクサイズ。
 //
-// 2026-09-04変更(5000→10000→5000): 往復回数を減らす目的で一時的に10,000件に
-// 上げたが、Supabase側のアクセスログを見ると、10,000件にした後は「1回目の
-// チャンク(offset=0)だけ成功し、2回目以降(offset=10000〜)が一切発生しない」
-// という状態が複数回再現した。5,000件のときは offset=195000 まで問題なく
-// 進んでいた実績があり、DB自体は速い(数ミリ秒)ことも確認済みなので、原因は
-// 特定できていないが10,000件固有の問題(レスポンスサイズか何らかの上限に
-// 関係している可能性)と判断し、実績のある5,000件に戻す。往復回数を減らす
-// 効果よりも「確実に完走する」ことを優先する。
-const LINES_CHUNK_SIZE = 5000;
+// 2026-09-07変更: 従来は明細行単位のv_profit_lines(/api/profit-lines、件数が
+// 増え続ける。2026-09時点で295,591行)を毎回全件ページング取得していたが、
+// データが増えるほど画面が開くのに時間がかかる(この時点で約1分)問題があった。
+// 事前集計テーブルprofit_summary(期間×拠点×営業担当×得意先の粒度、2026-09時点で
+// 19,945行と明細より桁違いに少ない。今後もアップロード件数ではなく組み合わせ数
+// でしか増えないため増加が緩やか)を経由する/api/profit-summaryに読み込み元を
+// 切り替えた(既にcomponents/ProfitSummary.tsxで実績のあるAPI・チャンクサイズを
+// そのまま踏襲している)。
+const SUMMARY_CHUNK_SIZE = 5000;
 
 // 2026-08-26判明(重要): SupabaseのREST API(PostgREST)には1リクエストあたりの
 // 最大件数(Max Rows)設定があり、この案件の環境では要求した3000件ではなく実際には
@@ -113,22 +111,6 @@ function fmtDateTime(ms: number): string {
   )}`;
 }
 
-// 経営マトリクスが必要とする範囲(今期・前期のうち一番古い期の開始日)を、
-// ProfitDashboard.tsx が availablePeriods/availableFiscalYears を計算するのと
-// 全く同じロジックで求める(表示される期間と取得範囲がズレないようにするため)。
-// 前期データが無ければ今期分だけで十分なので、無駄に古いデータまでは取得しない。
-function computeMatrixSince(orders: ProfitOrder[]): string | null {
-  const periodKeys = new Set<string>();
-  orders.forEach((o) => {
-    if (o.delivery_date) periodKeys.add(periodKeyFor(o.delivery_date));
-  });
-  if (periodKeys.size === 0) return null;
-  const fyStarts = Array.from(new Set(Array.from(periodKeys).map(fiscalYearStartOf))).sort((a, b) => b - a);
-  // fyStarts[0]=今期の期首年, fyStarts[1]=前期の期首年(あれば)
-  const targetFYStart = fyStarts.length > 1 ? fyStarts[1] : fyStarts[0];
-  return fiscalYearRangeFor(targetFYStart).from;
-}
-
 export default function ProfitDashboardLoader() {
   // orders: 実際に画面に表示するデータ。キャッシュ由来か、読み込み直後のものかを問わない。
   const [orders, setOrders] = useState<ProfitOrder[] | null>(null);
@@ -144,10 +126,13 @@ export default function ProfitDashboardLoader() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
-  // 2026-08-31追加: 経営マトリクス専用(行単位)データ。ordersとは別に読み込む。
+  // 2026-08-31追加: 経営マトリクス専用データ。ordersとは別に読み込む。
   // まだ読み込めていない間も、経営マトリクス以外(受注番号別内訳など)は
   // ordersだけで表示できるので、ページ全体はブロックしない。
-  const [matrixLines, setMatrixLines] = useState<ProfitLine[] | null>(null);
+  // 2026-09-07変更: 中身がv_profit_lines(行単位)からprofit_summary(事前集計)に
+  // 変わったが、状態名・propは互換性のため据え置き(ProfitDashboard.tsx側の
+  // 変更点を最小限にするため)。
+  const [matrixLines, setMatrixLines] = useState<ProfitSummaryRow[] | null>(null);
   const [matrixLinesLoading, setMatrixLinesLoading] = useState(false);
   const [matrixLinesError, setMatrixLinesError] = useState<string | null>(null);
   // 2026-09-04追加: 経営マトリクスの読み込み中、進捗件数が全く表示されず
@@ -264,23 +249,22 @@ export default function ProfitDashboardLoader() {
     if (isRefresh) setRefreshing(false);
 
     // 手動更新のときは、経営マトリクス用データも古いキャッシュのまま使い回さず、
-    // ordersと一緒に読み直す(仕入確定などでordersの数字が変われば、行単位の
-    // 集計結果も当然変わりうるため)。
-    if (isRefresh) clearProfitLinesCache();
-    runLoadMatrixLines(collected, isRefresh);
+    // ordersと一緒に読み直す(仕入確定などでordersの数字が変われば、集計結果も
+    // 当然変わりうるため)。
+    if (isRefresh) clearProfitSummaryCache();
+    runLoadMatrixLines(isRefresh);
   }
 
-  async function runLoadMatrixLines(currentOrders: ProfitOrder[], forceReload: boolean) {
-    const since = computeMatrixSince(currentOrders);
-    if (since === null) {
-      setMatrixLines([]);
-      return;
-    }
-
+  // 2026-09-07変更: 経営マトリクス用データの読み込み元をv_profit_lines(行単位、
+  // 件数が増え続ける)からprofit_summary(期間×拠点×営業担当×得意先の事前集計、
+  // 明細より桁違いに件数が少ない)に切り替えた。全期間分をまとめて取得しても
+  // 十分小さいため、以前のように「今期・前期のうち一番古い期の開始日」を計算して
+  // 絞り込む(since)必要が無くなり、ordersを渡す必要も無くなった。
+  async function runLoadMatrixLines(forceReload: boolean) {
     if (!forceReload) {
-      const cached = getProfitLinesCache(since);
+      const cached = getProfitSummaryCache();
       if (cached) {
-        setMatrixLines(cached.lines);
+        setMatrixLines(cached.rows);
         return;
       }
     }
@@ -290,8 +274,8 @@ export default function ProfitDashboardLoader() {
     setMatrixLinesLoadedCount(0);
     setMatrixLinesTotal(null);
 
-    const first = await fetchChunk<ProfitLine>(
-      `/api/profit-lines?since=${since}&offset=0&limit=${LINES_CHUNK_SIZE}`,
+    const first = await fetchChunk<ProfitSummaryRow>(
+      `/api/profit-summary?offset=0&limit=${SUMMARY_CHUNK_SIZE}`,
       0
     );
     if (cancelledRef.current) return;
@@ -303,7 +287,7 @@ export default function ProfitDashboardLoader() {
 
     const firstTotal = first.total;
     const actualPageSize = first.rows.length;
-    const collected: ProfitLine[] = [...first.rows];
+    const collected: ProfitSummaryRow[] = [...first.rows];
     setMatrixLinesTotal(firstTotal);
     setMatrixLinesLoadedCount(collected.length);
 
@@ -316,7 +300,7 @@ export default function ProfitDashboardLoader() {
         const batch = remainingOffsets.slice(i, i + CONCURRENCY);
         const results = await Promise.all(
           batch.map((o) =>
-            fetchChunk<ProfitLine>(`/api/profit-lines?since=${since}&offset=${o}&limit=${LINES_CHUNK_SIZE}`, o)
+            fetchChunk<ProfitSummaryRow>(`/api/profit-summary?offset=${o}&limit=${SUMMARY_CHUNK_SIZE}`, o)
           )
         );
         if (cancelledRef.current) return;
@@ -335,8 +319,8 @@ export default function ProfitDashboardLoader() {
     let gapFillRounds = 0;
     while (collected.length < firstTotal && gapFillRounds < MAX_GAP_FILL_ROUNDS) {
       if (cancelledRef.current) return;
-      const r = await fetchChunk<ProfitLine>(
-        `/api/profit-lines?since=${since}&offset=${collected.length}&limit=${LINES_CHUNK_SIZE}`,
+      const r = await fetchChunk<ProfitSummaryRow>(
+        `/api/profit-summary?offset=${collected.length}&limit=${SUMMARY_CHUNK_SIZE}`,
         collected.length
       );
       if (r.error) {
@@ -362,7 +346,7 @@ export default function ProfitDashboardLoader() {
       return;
     }
 
-    setProfitLinesCache(since, collected);
+    setProfitSummaryCache(collected);
     setMatrixLines(collected);
     setMatrixLinesLoading(false);
   }
@@ -376,7 +360,7 @@ export default function ProfitDashboardLoader() {
       if (cached) {
         setOrders(cached.orders);
         setLoadedAt(cached.loadedAt);
-        runLoadMatrixLines(cached.orders, false);
+        runLoadMatrixLines(false);
       } else {
         runLoad(false);
       }
@@ -459,7 +443,7 @@ export default function ProfitDashboardLoader() {
       matrixLinesError={matrixLinesError}
       matrixLinesLoadedCount={matrixLinesLoadedCount}
       matrixLinesTotal={matrixLinesTotal}
-      onRetryMatrixLines={() => runLoadMatrixLines(orders, true)}
+      onRetryMatrixLines={() => runLoadMatrixLines(true)}
     />
   );
 }

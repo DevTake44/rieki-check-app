@@ -19,6 +19,15 @@ export const maxDuration = 300;
  * (かつページング取得で並列に何十回も)重い集計SQLが再実行されてタイムアウトする問題が
  * 発生したため、こちらもマテリアライズドビュー化した。同じ理由でこのAPIでの
  * 再集計対象に追加している。
+ *
+ * 2026-09-07追記: 経営マトリクス(/profit)がv_profit_lines(明細行、件数が増え続ける)を
+ * 毎回全件ページング取得して画面側で集計していたため、データが増えるほど開くのが
+ * 遅くなる問題があった。事前集計テーブルprofit_summary(期間×拠点×営業担当×得意先の
+ * 粒度、明細より桁違いに件数が少ない)を経営マトリクスの読み込み元に切り替えたが、
+ * これまでprofit_summaryは自動更新の仕組みがなく手動でしか更新されていなかった。
+ * それだとアップロードのたびに経営マトリクスの数字が古いままになってしまうため、
+ * refresh_profit_views()と同じタイミングでprofit_summaryも再構築(TRUNCATE+INSERT)する
+ * refresh_profit_summary()関数を追加し、ここから呼ぶようにした。
  */
 export async function POST() {
   const supabase = getSupabaseServerClient();
@@ -31,6 +40,11 @@ export async function POST() {
   const { error: profitError } = await supabase.rpc("refresh_profit_views");
   if (profitError) {
     return NextResponse.json({ error: profitError.message }, { status: 500 });
+  }
+
+  const { error: profitSummaryError } = await supabase.rpc("refresh_profit_summary");
+  if (profitSummaryError) {
+    return NextResponse.json({ error: profitSummaryError.message }, { status: 500 });
   }
 
   return NextResponse.json({ refreshed: true });

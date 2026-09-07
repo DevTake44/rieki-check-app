@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { ProfitOrder, ProfitLine } from "@/lib/types";
+import type { ProfitOrder, ProfitSummaryRow } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
 import Link from "next/link";
@@ -238,12 +238,16 @@ export default function ProfitDashboard({
   // ProfitDashboardLoader側から差し込むためのスロット。このコンポーネント自体は
   // キャッシュの仕組みを知らなくてよいようにするため、任意のReactNodeを受け取るだけにしている。
   headerExtra?: ReactNode;
-  // 2026-08-31追加: 経営マトリクス(月別集計)専用の行単位データ。
+  // 2026-08-31追加: 経営マトリクス(月別集計)専用データ。
   // v_profit_by_order(受注番号単位)は複数月にまたがる受注の納品日を1つに
-  // 代表させてしまい月別集計がズレるため、経営マトリクスだけはこちら(行単位の
-  // delivery_date)を使う。読み込みはordersとは別に行われるため、届くまでは
-  // nullになる(その間、経営マトリクス以外は通常通りordersで表示できる)。
-  matrixLines: ProfitLine[] | null;
+  // 代表させてしまい月別集計がズレるため、経営マトリクスだけはこちら(period_end
+  // で月度が既に確定している事前集計データ)を使う。読み込みはordersとは別に
+  // 行われるため、届くまではnullになる(その間、経営マトリクス以外は通常通り
+  // ordersで表示できる)。
+  // 2026-09-07変更: 中身がv_profit_lines(行単位、件数が増え続ける)から
+  // profit_summary(期間×拠点×営業担当×得意先の事前集計、明細より桁違いに
+  // 少ない)に切り替わった。データが増えるほど画面が遅くなる問題への対策。
+  matrixLines: ProfitSummaryRow[] | null;
   matrixLinesLoading?: boolean;
   matrixLinesError?: string | null;
   // 2026-09-04追加: 経営マトリクスの読み込み進捗(件数)。無ければ従来通り
@@ -433,7 +437,7 @@ export default function ProfitDashboard({
   );
 
   // 2026-08-31変更: 経営マトリクスの月別集計は、受注番号単位(orders/ProfitOrder)
-  // ではなく行単位(matrixLines/ProfitLine)で行う。
+  // ではなく行単位で行う。
   // 理由: v_profit_by_order は受注番号ごとに複数行を合計し、delivery_dateも
   // 「その受注の中で一番遅い納品日」1つに代表させてしまう。1つの受注番号が
   // 複数月にまたがって出荷されるのはよくあるパターンで、そのままだと本来
@@ -441,9 +445,15 @@ export default function ProfitDashboard({
   // (実例: 受注番号610023464は4月・5月・6月の3回に分けて出荷されているが、
   // v_profit_by_orderのdelivery_dateは最終出荷日の6月1つに代表され、
   // 4・5月分の売上(合計15万6千円)まで6月として表示されてしまっていた)。
-  // 行単位のmatrixLinesならdelivery_dateが実際の納品日のままなので、この問題が起きない。
   // なお年間合計・受注番号別の一覧(このコンポーネントの他の部分)は元々ordersの
   // 集計で正しいため、影響を受けるのは経営マトリクスの月別内訳だけ。
+  //
+  // 2026-09-07変更: matrixLinesの中身がv_profit_lines(行単位、delivery_date)から
+  // profit_summary(20日締め期間×拠点×営業担当×得意先の事前集計、period_end)に
+  // 切り替わった。period_end自体が既にlib/period.tsと同じ20日締めルールで計算された
+  // 期間の末日(例: 202606度なら"2026-06-20")なので、periodKeyFor(period_end)で
+  // delivery_dateのときと全く同じperiodKeyが得られる(締め日ちょうどの日付は
+  // 「21日以降なら翌月」の判定に該当しないため)。
   const matrixLinesForCalc = matrixLines ?? [];
 
   // 会社全体で見て、今期のどの月まで実際に売上データが入っているか(=確定している月数)。
@@ -453,8 +463,8 @@ export default function ProfitDashboard({
     if (!matCurPeriods.length) return -1;
     const hasData = new Array(matCurPeriods.length).fill(false);
     for (const l of matrixLinesForCalc) {
-      if (!l.delivery_date || !l.revenue) continue;
-      const idx = matCurPeriods.indexOf(periodKeyFor(l.delivery_date));
+      if (!l.period_end || !l.revenue) continue;
+      const idx = matCurPeriods.indexOf(periodKeyFor(l.period_end));
       if (idx !== -1) hasData[idx] = true;
     }
     let last = -1;
@@ -468,8 +478,8 @@ export default function ProfitDashboard({
     if (!matCurPeriods.length) return [];
     const map = new Map<string, { name: string; cur: MonthCell[]; prev: MonthCell[] }>();
     for (const l of matrixLinesForCalc) {
-      if (!l.delivery_date) continue;
-      const pKey = periodKeyFor(l.delivery_date);
+      if (!l.period_end) continue;
+      const pKey = periodKeyFor(l.period_end);
       const curIdx = matCurPeriods.indexOf(pKey);
       const prevIdx = matPrevPeriods.indexOf(pKey);
       if (curIdx === -1 && prevIdx === -1) continue;
