@@ -287,14 +287,34 @@ export default function ProfitDashboard({
   }, [availablePeriods]);
 
   // 決算期(10月始まり、9/21〜翌9/20が1期)単位での「今期」「前期」切り替え用。
-  // データに含まれる決算期の期首年(10月度の年)を新しい順に並べ、先頭を今期・
-  // 2番目を前期として扱う。前期分のデータがまだ無ければ前期ボタンは出さない。
   const availableFiscalYears = useMemo(() => {
     const ys = new Set(availablePeriods.map((k) => fiscalYearStartOf(k)));
     return Array.from(ys).sort((a, b) => b - a);
   }, [availablePeriods]);
-  const currentFYStart = availableFiscalYears[0];
-  const previousFYStart = availableFiscalYears[1];
+  // 2026-09-07修正(重要): 以前は「データに含まれる決算期の期首年を新しい順に
+  // 並べ、先頭を今期として扱う」方式だったが、この方式だと月末に翌月分の予定
+  // 出荷などがdelivery_date=9/21以降(=次の決算期扱い)で1件でも登録されると、
+  // その1件だけを理由に「今期」がまるごと1年先の決算期にすり替わってしまう
+  // 不具合があった。
+  // 実例: 2026-09-30納品の148件(東京拠点、合計利益359,709円)が売上データに
+  // 含まれていただけで、periodKeyFor()が9/21以降を翌月度(202610)扱いにし、
+  // fiscalYearStartOf(202610)が2026年10月期と判定するため、経営マトリクスの
+  // 「今期」が実績のほとんど無い2026年10月期に切り替わり、本来の実績
+  // (2025年10月期、実際の売上・利益のほぼ全て)が丸ごと「前期」扱いになって、
+  // 経営マトリクスがほぼ空(359,709円の1マスだけ)に見えてしまっていた。
+  // 決算期は本来カレンダー上の「今日がいつか」で決まるものなので、データの
+  // 中身(に紛れ込む数件の未来日付)に左右されず、常に「今日」を基準に今期を
+  // 決める方式に変更する。前期は「今期の1年前」だが、実際にその期のデータが
+  // 無ければ(前期データ未アップロードなど)従来通りボタン自体を出さない。
+  const todayFYStart = useMemo(() => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
+      today.getDate()
+    ).padStart(2, "0")}`;
+    return fiscalYearStartOf(periodKeyFor(todayStr));
+  }, []);
+  const currentFYStart = todayFYStart;
+  const previousFYStart = availableFiscalYears.includes(todayFYStart - 1) ? todayFYStart - 1 : undefined;
 
   type PeriodMode = "all" | "fy-current" | "fy-previous" | "month";
 
