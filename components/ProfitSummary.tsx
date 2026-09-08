@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { ProfitSummaryRow } from "@/lib/types";
 import { branchLabel } from "@/lib/branch-names";
 import { repLabel } from "@/lib/rep-names";
+import { periodKeyFor, periodRangeFor, fiscalYearStartOf, fiscalYearPeriods, fiscalYearLabel } from "@/lib/period";
 
 /**
  * 拠点・営業担当・得意先別 利益ダッシュボード
@@ -28,6 +29,9 @@ import { repLabel } from "@/lib/rep-names";
  */
 
 type Dimension = "branch" | "rep" | "customer";
+// 2026-09-08追加: /profit(経営マトリクス)と同じ「今期/前期/全期間」の決算期切り替え。
+// "month" は下の「月で指定」プルダウンで特定の期間(period_end)を1つ選んだ状態。
+type PeriodMode = "all" | "fy-current" | "fy-previous" | "month";
 
 const CHUNK_SIZE = 5000;
 const CONCURRENCY = 4;
@@ -126,6 +130,8 @@ export default function ProfitSummary() {
   const cancelledRef = useRef(false);
 
   const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
+  // 2026-09-08追加: 初期表示は/profitと同じ「今期」に揃える(比較しやすくするため)。
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("fy-current");
   const [dimension, setDimension] = useState<Dimension>("branch");
 
   async function runLoad(isRefresh: boolean) {
@@ -237,11 +243,48 @@ export default function ProfitSummary() {
     return Array.from(s).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)); // 新しい順
   }, [rows]);
 
+  // 2026-09-08追加: /profitの経営マトリクスと同じ決算期(10月始まり)の考え方。
+  // 「今期」は必ず今日の日付基準で決める(データの中身に紛れ込んだ未来日付1件で
+  // 「今期」がすり替わってしまう不具合を過去にProfitDashboard.tsxで踏んだため、
+  // 同じ考え方をここでも踏襲する。詳しくはcomponents/ProfitDashboard.tsxの
+  // todayFYStart周りのコメント参照)。
+  const availableFiscalYears = useMemo(() => {
+    if (!rows) return [];
+    const ys = new Set(rows.map((r) => fiscalYearStartOf(periodKeyFor(r.period_end))));
+    return Array.from(ys).sort((a, b) => b - a);
+  }, [rows]);
+  const currentFYStart = useMemo(() => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
+      today.getDate()
+    ).padStart(2, "0")}`;
+    return fiscalYearStartOf(periodKeyFor(todayStr));
+  }, []);
+  const previousFYStart = availableFiscalYears.includes(currentFYStart - 1) ? currentFYStart - 1 : undefined;
+
+  // 決算期(10月始まり)の期首年から、その決算期に属するperiod_end(締め日)の集合を作る。
+  // period_end自体が既に20日締めルールで計算された期間の末日(periodRangeFor(key).toと同じ形式)
+  // なので、これで確実に一致する。
+  function fyPeriodEndSet(startCalYear: number): Set<string> {
+    return new Set(fiscalYearPeriods(startCalYear).map((k) => periodRangeFor(k).to));
+  }
+
   const filteredRows = useMemo(() => {
     if (!rows) return [];
-    if (selectedPeriod === "all") return rows;
-    return rows.filter((r) => r.period_end === selectedPeriod);
-  }, [rows, selectedPeriod]);
+    if (periodMode === "month") {
+      if (selectedPeriod === "all") return rows;
+      return rows.filter((r) => r.period_end === selectedPeriod);
+    }
+    if (periodMode === "fy-current") {
+      const set = fyPeriodEndSet(currentFYStart);
+      return rows.filter((r) => set.has(r.period_end));
+    }
+    if (periodMode === "fy-previous" && previousFYStart !== undefined) {
+      const set = fyPeriodEndSet(previousFYStart);
+      return rows.filter((r) => set.has(r.period_end));
+    }
+    return rows; // "all"
+  }, [rows, periodMode, selectedPeriod, currentFYStart, previousFYStart]);
 
   const grouped = useMemo(() => {
     type Group = {
@@ -384,15 +427,50 @@ export default function ProfitSummary() {
       ) : (
         <>
           <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+              <span style={{ fontSize: 13 }}>期間(決算期・10月始まり):</span>
+              <div className="segmented">
+                <button type="button" className={periodMode === "all" ? "active" : ""} onClick={() => setPeriodMode("all")}>
+                  全期間
+                </button>
+                <button
+                  type="button"
+                  className={periodMode === "fy-current" ? "active" : ""}
+                  onClick={() => setPeriodMode("fy-current")}
+                >
+                  今期({fiscalYearLabel(currentFYStart)})
+                </button>
+                {previousFYStart !== undefined ? (
+                  <button
+                    type="button"
+                    className={periodMode === "fy-previous" ? "active" : ""}
+                    onClick={() => setPeriodMode("fy-previous")}
+                  >
+                    前期({fiscalYearLabel(previousFYStart)})
+                  </button>
+                ) : (
+                  <span className="cell-sub">前期データは未アップロードです</span>
+                )}
+              </div>
+            </div>
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
               <label style={{ fontSize: 13 }}>
-                期間:{" "}
+                月で指定(任意):{" "}
                 <select
-                  value={selectedPeriod}
-                  onChange={(e) => setSelectedPeriod(e.target.value)}
+                  value={periodMode === "month" ? selectedPeriod : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) {
+                      setPeriodMode("fy-current");
+                      setSelectedPeriod("all");
+                      return;
+                    }
+                    setPeriodMode("month");
+                    setSelectedPeriod(v);
+                  }}
                   style={{ padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 4 }}
                 >
-                  <option value="all">全期間</option>
+                  <option value="">―</option>
                   {periods.map((p) => (
                     <option key={p} value={p}>
                       〜{p}締め
