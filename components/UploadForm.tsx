@@ -40,7 +40,6 @@ type Status = {
   refreshing: boolean;
   refreshed: boolean;
   duplicatesRemoved: number | null;
-  pruned: number | null;
   duplicateWarnings: DuplicateWarning[];
   duplicateCandidateTotal: number;
 };
@@ -61,7 +60,6 @@ function initialStatus(): Status {
     refreshing: false,
     refreshed: false,
     duplicatesRemoved: null,
-    pruned: null,
     duplicateWarnings: [],
     duplicateCandidateTotal: 0,
   };
@@ -273,7 +271,6 @@ export default function UploadForm() {
       // (callRefreshApi)はこのデータと無関係なので行わない。
       const batches = chunk(mapped, BATCH_SIZE);
       setStatus((s) => ({ ...s, totalRows: mapped.length, totalBatches: batches.length }));
-      let pruned: number | null = null;
 
       for (let i = 0; i < batches.length; i++) {
         try {
@@ -287,12 +284,11 @@ export default function UploadForm() {
             errors.push(`バッチ${i + 1}/${batches.length}: ${json.error ?? res.statusText}`);
           } else {
             sent += typeof json.inserted === "number" ? json.inserted : batches[i].length;
-            if (typeof json.pruned === "number") pruned = (pruned ?? 0) + json.pruned;
           }
         } catch (e) {
           errors.push(`バッチ${i + 1}/${batches.length}: ${String(e)}`);
         }
-        setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors], pruned }));
+        setStatus((s) => ({ ...s, sentRows: sent, doneBatches: i + 1, errors: [...errors] }));
       }
 
       setStatus((s) => ({ ...s, running: false, finished: true }));
@@ -636,11 +632,6 @@ export default function UploadForm() {
                     うち、受注番号・受注行番号が重複していた{status.duplicatesRemoved.toLocaleString("ja-JP")}件は自動的に1件にまとめて取り込みました(金額の二重計上を防止)。
                   </div>
                 )}
-                {mode === "accumulate" && status.pruned !== null && status.pruned > 0 && (
-                  <div style={{ color: "var(--direct)" }}>
-                    あわせて、発行日が3か月より前の古いデータ{status.pruned.toLocaleString("ja-JP")}件を削除しました。
-                  </div>
-                )}
               </div>
             )}
             {status.errors.length > 0 && (
@@ -746,7 +737,7 @@ export default function UploadForm() {
       {renderBlock(
         "shippingNote",
         "送り状問合せデータ(運賃照合用)",
-        "送り状問合せCSVを選択してください(得意先コード・受注番号・運送会社名・送り状番号などを含む列構成)。送り状番号をキーに蓄積(upsert)され、発行日が3か月より前の古いデータは自動的に削除されます。",
+        "送り状問合せCSVを選択してください(得意先コード・受注番号・運送会社名・送り状番号などを含む列構成)。送り状番号をキーに蓄積(upsert)されます(古いデータの自動削除は行いません)。",
         shippingNoteStatus,
         "accumulate"
       )}

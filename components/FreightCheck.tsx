@@ -16,7 +16,7 @@ import Link from "next/link";
  * 1. 運送会社の請求データ(このページでドラッグ&ドロップ、都度その場で読み込むだけで
  *    Supabaseには保存しない)から、送り状番号(＝原票No./原票番号)と実費運賃を取り出す。
  * 2. 送り状番号を、事前にSupabaseへ取り込んである shipping_note_mapping
- *    (「送り状問合せ」CSVから作った、送り状番号↔自社の受注番号の対応表。3か月分プール)
+ *    (「送り状問合せ」CSVから作った、送り状番号↔自社の受注番号の対応表)
  *    で受注番号に変換する。
  * 3. その受注番号で sales_lines の運賃行(商品コード="99")を探し、得意先への請求額
  *    (sell_price)を取得、実費と比較する。
@@ -955,7 +955,7 @@ export default function FreightCheck({
           <Link href="/upload" style={{ marginLeft: 4 }}>
             データ更新
           </Link>
-          画面から行ってください(3か月分プールされ、古いデータは自動削除されます)。
+          画面から行ってください(蓄積方式で、古いデータの自動削除は行いません)。
         </p>
         <div style={{ fontSize: 13 }}>
           現在 {mappingRows.length.toLocaleString("ja-JP")} 件
